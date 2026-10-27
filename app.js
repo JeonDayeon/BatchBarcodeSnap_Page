@@ -1,28 +1,15 @@
-// Load the full decoder after the interface has initialized. If the CDN is
-// unavailable, Chromium's built-in BarcodeDetector can still scan supported
-// formats and, crucially, the rest of the UI remains interactive.
+// Load ZXing asynchronously so a blocked CDN does not prevent the interface
+// buttons from being connected. Scanning still requires the ZXing module.
 let BarcodeFormat, BinaryBitmap, DecodeHintType, GenericMultipleBarcodeReader, HybridBinarizer, MultiFormatReader, RGBLuminanceSource;
-let multipleReader = null, nativeDetector = null, decoderReady = null;
-async function prepareDecoder() {
-  if (decoderReady) return decoderReady;
-  decoderReady = (async () => {
-    try {
-      const z = await import("https://esm.sh/@zxing/library@0.21.3");
-      ({ BarcodeFormat, BinaryBitmap, DecodeHintType, GenericMultipleBarcodeReader, HybridBinarizer, MultiFormatReader, RGBLuminanceSource } = z);
-      const reader = new MultiFormatReader();
-      reader.setHints(new Map([[DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.DATA_MATRIX, BarcodeFormat.QR_CODE, BarcodeFormat.CODE_39, BarcodeFormat.CODE_93, BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.ITF, BarcodeFormat.AZTEC, BarcodeFormat.PDF_417]], [DecodeHintType.TRY_HARDER, true]]));
-      multipleReader = new GenericMultipleBarcodeReader(reader);
-      return "zxing";
-    } catch (error) {
-      console.warn("ZXing CDN unavailable; trying the browser barcode engine", error);
-      if ("BarcodeDetector" in window) {
-        const supported = await BarcodeDetector.getSupportedFormats();
-        const formats = ["code_128", "data_matrix", "qr_code", "code_39", "code_93", "ean_13", "ean_8", "upc_a", "upc_e", "itf", "aztec", "pdf417"].filter(f => supported.includes(f));
-        if (formats.length) { nativeDetector = new BarcodeDetector({ formats }); return "native"; }
-      }
-      throw new Error("바코드 엔진을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.");
-    }
-  })();
+let multipleReader = null, decoderReady = null;
+function prepareDecoder() {
+  if (!decoderReady) decoderReady = import("https://esm.sh/@zxing/library@0.21.3").then(z => {
+    ({ BarcodeFormat, BinaryBitmap, DecodeHintType, GenericMultipleBarcodeReader, HybridBinarizer, MultiFormatReader, RGBLuminanceSource } = z);
+    const formats = [BarcodeFormat.CODE_128, BarcodeFormat.DATA_MATRIX, BarcodeFormat.QR_CODE, BarcodeFormat.CODE_39, BarcodeFormat.CODE_93, BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.ITF, BarcodeFormat.AZTEC, BarcodeFormat.PDF_417];
+    const hints = new Map([[DecodeHintType.POSSIBLE_FORMATS, formats], [DecodeHintType.TRY_HARDER, true]]);
+    const reader = new MultiFormatReader(); reader.setHints(hints);
+    multipleReader = new GenericMultipleBarcodeReader(reader);
+  });
   return decoderReady;
 }
 
@@ -106,11 +93,7 @@ function requestPersistentStorage() {
   }).catch(() => {});
 }
 
-function setStatus(text) {
-  $("liveStatus").textContent = text;
-  const feedback = $("actionFeedback");
-  if (feedback) feedback.textContent = text;
-}
+function setStatus(text) { $("liveStatus").textContent = text; }
 function labelFormat(format) { return format === "DATA_MATRIX" ? "Data Matrix" : format.replaceAll("_", " "); }
 function makeLuminance(imageData, width, height) {
   const pixels = new Int32Array(width * height);
@@ -130,13 +113,8 @@ function decodeRegion(x, y, w, h) {
     }).filter(Boolean);
   } catch { return []; }
 }
-async function decodeCanvas() {
+function decodeCanvas() {
   const w = scanCanvas.width, h = scanCanvas.height, found = [];
-  if (nativeDetector) {
-    const hits = await nativeDetector.detect(scanCanvas);
-    return hits.map(hit => ({ value: hit.rawValue, format: ({ data_matrix: "Data Matrix", code_128: "Code 128", qr_code: "QR CODE", code_39: "Code 39", code_93: "Code 93", ean_13: "EAN 13", ean_8: "EAN 8", upc_a: "UPC A", upc_e: "UPC E", itf: "ITF", aztec: "AZTEC", pdf417: "PDF 417" })[hit.format] || hit.format, left: hit.boundingBox.x, top: hit.boundingBox.y, right: hit.boundingBox.right, bottom: hit.boundingBox.bottom }));
-  }
-  if (!multipleReader) return [];
   // Broad image pass followed by overlapping detail crops. Coordinates remain
   // in the same frame coordinate system for stable overlay placement.
   found.push(...decodeRegion(0, 0, w, h));
@@ -259,11 +237,9 @@ async function scanFrame(now) {
   try {
     const gray=grayscaleFrame();
     advanceOpticalTracks(gray,scanCanvas.width,scanCanvas.height,now,scale);
-    const detections=(await decodeCanvas()).map(b=>({...b,left:b.left/scale,top:b.top/scale,right:b.right/scale,bottom:b.bottom/scale}));
+    const detections=decodeCanvas().map(b=>({...b,left:b.left/scale,top:b.top/scale,right:b.right/scale,bottom:b.bottom/scale}));
     updateTracks(detections,Date.now(),gray,scanCanvas.width,scanCanvas.height,scale);
     setStatus(detections.length?`프레임 검출 ${detections.length} · 누적 ${results.length}`:"바코드 탐색 중");
-  } catch (error) {
-    setStatus(error.message || "바코드를 분석하지 못했습니다.");
   } finally { busy=false; }
   drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight);
   frames++; if(now-lastCountAt>=1000){$("fps").textContent=`${frames} fps`;frames=0;lastCountAt=now;}
@@ -271,11 +247,11 @@ async function scanFrame(now) {
 async function startCamera() {
   requestPersistentStorage();
   try {
+    prepareDecoder().catch(error => setStatus("스캔 엔진 로딩 실패 · 인터넷 연결을 확인해 주세요."));
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("HTTPS 또는 localhost에서 열어야 카메라를 쓸 수 있습니다.");
     stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}}});
     video.srcObject=stream; await video.play(); running=true; $("cameraPlaceholder").classList.add("hidden");
     $("startCamera").disabled=true; $("stopCamera").disabled=false; $("flipCamera").disabled=false; setStatus("카메라 실행 중 · 스캔 엔진 준비 중");
-    prepareDecoder().then(engine => { if (running) setStatus(engine === "native" ? "카메라 실행 중 · 브라우저 내장 스캔" : "카메라 실행 중"); }).catch(error => { if (running) setStatus(`${error.message} 카메라는 실행 중입니다.`); });
     raf=requestAnimationFrame(scanFrame);
   } catch(error) { setStatus(error.message||"카메라를 시작하지 못했습니다."); }
 }
@@ -302,20 +278,21 @@ function escapeHtml(value) { return value.replace(/[&<>"']/g,c=>({"&":"&amp;","<
 async function scanPhoto(file) {
   const img=$("photo"), url=URL.createObjectURL(file); img.src=url; await img.decode();
   const scale=Math.min(1,2400/Math.max(img.naturalWidth,img.naturalHeight)); scanCanvas.width=Math.round(img.naturalWidth*scale); scanCanvas.height=Math.round(img.naturalHeight*scale); scanCtx.drawImage(img,0,0,scanCanvas.width,scanCanvas.height);
-  const start=performance.now(); await prepareDecoder(); const hits=await decodeCanvas();
+  await prepareDecoder();
+  const start=performance.now(), hits=decodeCanvas();
   URL.revokeObjectURL(url);
   return {file,hits,width:img.naturalWidth,height:img.naturalHeight,elapsedMs:Math.round(performance.now()-start),canvasWidth:scanCanvas.width,canvasHeight:scanCanvas.height};
 }
 $("startCamera").addEventListener("click",startCamera); $("stopCamera").addEventListener("click",stopCamera);
 $("flipCamera").addEventListener("click",async()=>{facing=facing==="environment"?"user":"environment";stopCamera();await startCamera();});
-$("clearResults").addEventListener("click",()=>{if((results.length||currentPhotos.length)&&!window.confirm(`스캔 결과 ${results.length}개와 사진 ${currentPhotos.length}장을 이 기기에서 지울까요?`))return;results=[];tracks=[];currentPhotos=[];nextId=1;$("photo").removeAttribute("src");ctx.clearRect(0,0,overlay.width,overlay.height);$("photoOverlay").getContext("2d").clearRect(0,0,$("photoOverlay").width,$("photoOverlay").height);$("photoStatus").textContent="사진은 이 브라우저 안에서만 처리됩니다.";renderResults();setStatus("스캔 결과를 초기화했습니다.");});
-$("copyResults").addEventListener("click",async()=>{if(!results.length){setStatus("복사할 결과가 없습니다. 먼저 바코드를 스캔해 주세요.");return;}const text=orderRightToLeftColumns(results).map((r,i)=>`${i+1}\t${r.format}\t${r.value}`).join("\n");try{await navigator.clipboard.writeText(text);setStatus(`${results.length}개 결과를 복사했습니다.`);}catch{const input=document.createElement("textarea");input.value=text;input.style.position="fixed";input.style.opacity="0";document.body.append(input);input.select();const copied=document.execCommand("copy");input.remove();setStatus(copied?`${results.length}개 결과를 복사했습니다.`:"복사 권한이 없어 복사하지 못했습니다. CSV를 이용해 주세요.");}});
-$("shareResults").addEventListener("click",async()=>{if(!results.length){setStatus("공유할 결과가 없습니다. 먼저 바코드를 스캔해 주세요.");return;}const text=orderRightToLeftColumns(results).map((r,i)=>`${i+1}\t${r.format}\t${r.value}`).join("\n");try{if(navigator.share){await navigator.share({title:"바코드 스캔 결과",text});setStatus(`${results.length}개 결과를 공유했습니다.`);}else{await navigator.clipboard.writeText(text);setStatus("이 브라우저는 공유 메뉴를 지원하지 않아 결과를 복사했습니다.");}}catch(error){if(error.name!=="AbortError")setStatus("공유하지 못했습니다. 복사 또는 CSV를 이용해 주세요.");}});
-$("finishResults").addEventListener("click",()=>{if(!results.length){setStatus("전달할 결과가 없습니다. 먼저 바코드를 스캔해 주세요.");return;}const payload={type:"batchbarcode:results",version:1,items:orderRightToLeftColumns(results).map((r,index)=>({sequence:index+1,value:r.value,format:r.format,trackId:r.id,photoIndex:r.photoIndex==null?null:r.photoIndex+1,sourceName:r.sourceName||null}))};if(window.parent!==window){window.parent.postMessage(payload,location.origin);setStatus(`전산 화면에 ${payload.items.length}개 결과를 전달했습니다.`);}else setStatus("단독 스캐너라 전산 화면으로 바로 전달할 수 없어요. 복사, 공유 또는 CSV를 이용해 주세요.");});
-$("exportCsv").addEventListener("click",()=>{if(!results.length){setStatus("내보낼 결과가 없습니다. 먼저 바코드를 스캔해 주세요.");return;}const quote=x=>`"${String(x).replaceAll('"','""')}"`;const ordered=orderRightToLeftColumns(results);const csv="순번,사진,규격,바코드 값\r\n"+ordered.map((r,i)=>[i+1,r.photoIndex==null?"":r.photoIndex+1,r.format,r.value].map(quote).join(",")).join("\r\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff",csv],{type:"text/csv;charset=utf-8"}));a.download="barcode-results.csv";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);setStatus(`${results.length}개 결과를 CSV로 내보냈습니다.`);});
+$("clearResults").addEventListener("click",()=>{results=[];tracks=[];currentPhotos=[];nextId=1;$("photo").removeAttribute("src");ctx.clearRect(0,0,overlay.width,overlay.height);$("photoOverlay").getContext("2d").clearRect(0,0,$("photoOverlay").width,$("photoOverlay").height);$("photoStatus").textContent="사진은 이 브라우저 안에서만 처리됩니다.";renderResults();});
+$("copyResults").addEventListener("click",async()=>{await navigator.clipboard.writeText(orderRightToLeftColumns(results).map((r,i)=>`${i+1}\t${r.format}\t${r.value}`).join("\n"));});
+$("finishResults").addEventListener("click",()=>{const payload={type:"batchbarcode:results",version:1,items:orderRightToLeftColumns(results).map((r,index)=>({sequence:index+1,value:r.value,format:r.format,trackId:r.id,photoIndex:r.photoIndex==null?null:r.photoIndex+1,sourceName:r.sourceName||null}))};if(window.parent!==window)window.parent.postMessage(payload,location.origin);setStatus(window.parent===window?"결과를 정리했습니다. 전산 화면 안에서 열면 전달됩니다.":`전산 화면에 ${payload.items.length}개 결과를 전달했습니다.`);});
+$("exportCsv").addEventListener("click",()=>{const quote=x=>`"${String(x).replaceAll('"','""')}"`;const ordered=orderRightToLeftColumns(results);const csv="순번,사진,규격,바코드 값\r\n"+ordered.map((r,i)=>[i+1,r.photoIndex==null?"":r.photoIndex+1,r.format,r.value].map(quote).join(",")).join("\r\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff",csv],{type:"text/csv;charset=utf-8"}));a.download="barcode-results.csv";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);});
 $("photoInput").addEventListener("change",async e=>{const files=[...(e.target.files||[])];if(!files.length)return;requestPersistentStorage();results=[];currentPhotos=files.map(file=>({name:file.name,type:file.type,blob:file,width:0,height:0}));let allHits=0,totalMs=0,last=null;try{for(let i=0;i<files.length;i++){const photo=await scanPhoto(files[i]);last=photo;totalMs+=photo.elapsedMs;currentPhotos[i].width=photo.width;currentPhotos[i].height=photo.height;for(const hit of photo.hits){results.push({id:nextId++,value:hit.value,format:hit.format,left:hit.left,top:hit.top,right:hit.right,bottom:hit.bottom,photoIndex:i,sourceName:photo.file.name,firstSeen:Date.now()});}allHits+=photo.hits.length;}renderResults();await saveLocalSnapshot();$("photoStatus").textContent=`사진 ${files.length}장 · ${allHits}개 위치 · ${totalMs} ms · 마지막 사진 ${last.width}×${last.height}px`;if(last)drawOverlay($("photoOverlay"),last.hits.map((h,i)=>({...h,id:i+1,box:h,stable:true,lastSeen:Date.now()})),last.canvasWidth,last.canvasHeight);}catch(err){$("photoStatus").textContent=`${err.message} · 저장 공간이 부족하면 사진 수를 줄여 주세요.`;}finally{e.target.value="";}});
 document.querySelectorAll(".tab").forEach(button=>button.addEventListener("click",()=>{document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b===button));$("livePanel").classList.toggle("hidden",button.dataset.mode!=="live");$("photoPanel").classList.toggle("hidden",button.dataset.mode!=="photo");}));
 window.addEventListener("resize",()=>{if(video.videoWidth)drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight);});
 window.addEventListener("pagehide",stopCamera);
 restoreLocalSnapshot();
+prepareDecoder().catch(error => setStatus("스캔 엔진 로딩 실패 · 인터넷 연결을 확인해 주세요."));
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) navigator.serviceWorker.register("./sw.js").catch(error => console.warn("Service worker registration failed", error));
