@@ -271,13 +271,11 @@ async function scanFrame(now) {
 async function startCamera() {
   requestPersistentStorage();
   try {
-    setStatus("바코드 엔진 준비 중");
-    const engine = await prepareDecoder();
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("HTTPS 또는 localhost에서 열어야 카메라를 쓸 수 있습니다.");
     stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}}});
     video.srcObject=stream; await video.play(); running=true; $("cameraPlaceholder").classList.add("hidden");
-    $("startCamera").disabled=true; $("stopCamera").disabled=false; $("flipCamera").disabled=false; setStatus("카메라 실행 중");
-    setStatus(engine === "native" ? "카메라 실행 중 · 브라우저 내장 스캔" : "카메라 실행 중");
+    $("startCamera").disabled=true; $("stopCamera").disabled=false; $("flipCamera").disabled=false; setStatus("카메라 실행 중 · 스캔 엔진 준비 중");
+    prepareDecoder().then(engine => { if (running) setStatus(engine === "native" ? "카메라 실행 중 · 브라우저 내장 스캔" : "카메라 실행 중"); }).catch(error => { if (running) setStatus(`${error.message} 카메라는 실행 중입니다.`); });
     raf=requestAnimationFrame(scanFrame);
   } catch(error) { setStatus(error.message||"카메라를 시작하지 못했습니다."); }
 }
@@ -320,5 +318,4 @@ document.querySelectorAll(".tab").forEach(button=>button.addEventListener("click
 window.addEventListener("resize",()=>{if(video.videoWidth)drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight);});
 window.addEventListener("pagehide",stopCamera);
 restoreLocalSnapshot();
-prepareDecoder().then(engine => setStatus(engine === "native" ? "브라우저 내장 스캔 준비됨" : "바코드 스캔 준비됨")).catch(error => setStatus(error.message));
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) navigator.serviceWorker.register("./sw.js").catch(error => console.warn("Service worker registration failed", error));
