@@ -1,12 +1,34 @@
-import { BarcodeFormat, BinaryBitmap, DecodeHintType, GenericMultipleBarcodeReader, HybridBinarizer, MultiFormatReader, RGBLuminanceSource } from "https://esm.sh/@zxing/library@0.21.3";
+// Load the full decoder after the interface has initialized. If the CDN is
+// unavailable, Chromium's built-in BarcodeDetector can still scan supported
+// formats and, crucially, the rest of the UI remains interactive.
+let BarcodeFormat, BinaryBitmap, DecodeHintType, GenericMultipleBarcodeReader, HybridBinarizer, MultiFormatReader, RGBLuminanceSource;
+let multipleReader = null, nativeDetector = null, decoderReady = null;
+async function prepareDecoder() {
+  if (decoderReady) return decoderReady;
+  decoderReady = (async () => {
+    try {
+      const z = await import("https://esm.sh/@zxing/library@0.21.3");
+      ({ BarcodeFormat, BinaryBitmap, DecodeHintType, GenericMultipleBarcodeReader, HybridBinarizer, MultiFormatReader, RGBLuminanceSource } = z);
+      const reader = new MultiFormatReader();
+      reader.setHints(new Map([[DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.DATA_MATRIX, BarcodeFormat.QR_CODE, BarcodeFormat.CODE_39, BarcodeFormat.CODE_93, BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.ITF, BarcodeFormat.AZTEC, BarcodeFormat.PDF_417]], [DecodeHintType.TRY_HARDER, true]]));
+      multipleReader = new GenericMultipleBarcodeReader(reader);
+      return "zxing";
+    } catch (error) {
+      console.warn("ZXing CDN unavailable; trying the browser barcode engine", error);
+      if ("BarcodeDetector" in window) {
+        const supported = await BarcodeDetector.getSupportedFormats();
+        const formats = ["code_128", "data_matrix", "qr_code", "code_39", "code_93", "ean_13", "ean_8", "upc_a", "upc_e", "itf", "aztec", "pdf417"].filter(f => supported.includes(f));
+        if (formats.length) { nativeDetector = new BarcodeDetector({ formats }); return "native"; }
+      }
+      throw new Error("바코드 엔진을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.");
+    }
+  })();
+  return decoderReady;
+}
 
 const $ = (id) => document.getElementById(id);
 const video = $("video"), overlay = $("overlay"), ctx = overlay.getContext("2d");
 const scanCanvas = document.createElement("canvas"), scanCtx = scanCanvas.getContext("2d", { willReadFrequently: true });
-const formats = [BarcodeFormat.CODE_128, BarcodeFormat.DATA_MATRIX, BarcodeFormat.QR_CODE, BarcodeFormat.CODE_39, BarcodeFormat.CODE_93, BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.ITF, BarcodeFormat.AZTEC, BarcodeFormat.PDF_417];
-const hints = new Map([[DecodeHintType.POSSIBLE_FORMATS, formats], [DecodeHintType.TRY_HARDER, true]]);
-const reader = new MultiFormatReader(); reader.setHints(hints);
-const multipleReader = new GenericMultipleBarcodeReader(reader);
 let stream = null, facing = "environment", running = false, busy = false, raf = 0, lastScan = 0, lastCountAt = performance.now(), frames = 0;
 let tracks = [], nextId = 1, results = [], previousGray = null, previousScanMs = 0;
 let currentPhotos = [], persistenceTimer = 0, databasePromise = null;
@@ -108,8 +130,13 @@ function decodeRegion(x, y, w, h) {
     }).filter(Boolean);
   } catch { return []; }
 }
-function decodeCanvas() {
+async function decodeCanvas() {
   const w = scanCanvas.width, h = scanCanvas.height, found = [];
+  if (nativeDetector) {
+    const hits = await nativeDetector.detect(scanCanvas);
+    return hits.map(hit => ({ value: hit.rawValue, format: ({ data_matrix: "Data Matrix", code_128: "Code 128", qr_code: "QR CODE", code_39: "Code 39", code_93: "Code 93", ean_13: "EAN 13", ean_8: "EAN 8", upc_a: "UPC A", upc_e: "UPC E", itf: "ITF", aztec: "AZTEC", pdf417: "PDF 417" })[hit.format] || hit.format, left: hit.boundingBox.x, top: hit.boundingBox.y, right: hit.boundingBox.right, bottom: hit.boundingBox.bottom }));
+  }
+  if (!multipleReader) return [];
   // Broad image pass followed by overlapping detail crops. Coordinates remain
   // in the same frame coordinate system for stable overlay placement.
   found.push(...decodeRegion(0, 0, w, h));
@@ -232,9 +259,11 @@ async function scanFrame(now) {
   try {
     const gray=grayscaleFrame();
     advanceOpticalTracks(gray,scanCanvas.width,scanCanvas.height,now,scale);
-    const detections=decodeCanvas().map(b=>({...b,left:b.left/scale,top:b.top/scale,right:b.right/scale,bottom:b.bottom/scale}));
+    const detections=(await decodeCanvas()).map(b=>({...b,left:b.left/scale,top:b.top/scale,right:b.right/scale,bottom:b.bottom/scale}));
     updateTracks(detections,Date.now(),gray,scanCanvas.width,scanCanvas.height,scale);
     setStatus(detections.length?`프레임 검출 ${detections.length} · 누적 ${results.length}`:"바코드 탐색 중");
+  } catch (error) {
+    setStatus(error.message || "바코드를 분석하지 못했습니다.");
   } finally { busy=false; }
   drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight);
   frames++; if(now-lastCountAt>=1000){$("fps").textContent=`${frames} fps`;frames=0;lastCountAt=now;}
@@ -242,10 +271,13 @@ async function scanFrame(now) {
 async function startCamera() {
   requestPersistentStorage();
   try {
+    setStatus("바코드 엔진 준비 중");
+    const engine = await prepareDecoder();
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("HTTPS 또는 localhost에서 열어야 카메라를 쓸 수 있습니다.");
     stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}}});
     video.srcObject=stream; await video.play(); running=true; $("cameraPlaceholder").classList.add("hidden");
     $("startCamera").disabled=true; $("stopCamera").disabled=false; $("flipCamera").disabled=false; setStatus("카메라 실행 중");
+    setStatus(engine === "native" ? "카메라 실행 중 · 브라우저 내장 스캔" : "카메라 실행 중");
     raf=requestAnimationFrame(scanFrame);
   } catch(error) { setStatus(error.message||"카메라를 시작하지 못했습니다."); }
 }
@@ -272,7 +304,7 @@ function escapeHtml(value) { return value.replace(/[&<>"']/g,c=>({"&":"&amp;","<
 async function scanPhoto(file) {
   const img=$("photo"), url=URL.createObjectURL(file); img.src=url; await img.decode();
   const scale=Math.min(1,2400/Math.max(img.naturalWidth,img.naturalHeight)); scanCanvas.width=Math.round(img.naturalWidth*scale); scanCanvas.height=Math.round(img.naturalHeight*scale); scanCtx.drawImage(img,0,0,scanCanvas.width,scanCanvas.height);
-  const start=performance.now(), hits=decodeCanvas();
+  const start=performance.now(); await prepareDecoder(); const hits=await decodeCanvas();
   URL.revokeObjectURL(url);
   return {file,hits,width:img.naturalWidth,height:img.naturalHeight,elapsedMs:Math.round(performance.now()-start),canvasWidth:scanCanvas.width,canvasHeight:scanCanvas.height};
 }
@@ -288,4 +320,5 @@ document.querySelectorAll(".tab").forEach(button=>button.addEventListener("click
 window.addEventListener("resize",()=>{if(video.videoWidth)drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight);});
 window.addEventListener("pagehide",stopCamera);
 restoreLocalSnapshot();
+prepareDecoder().then(engine => setStatus(engine === "native" ? "브라우저 내장 스캔 준비됨" : "바코드 스캔 준비됨")).catch(error => setStatus(error.message));
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) navigator.serviceWorker.register("./sw.js").catch(error => console.warn("Service worker registration failed", error));
