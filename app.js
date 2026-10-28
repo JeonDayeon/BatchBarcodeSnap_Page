@@ -1,17 +1,15 @@
-// Load ZXing asynchronously so a blocked CDN does not prevent the interface
-// buttons from being connected. Scanning still requires the ZXing module.
-let BarcodeFormat, BinaryBitmap, DecodeHintType, GenericMultipleBarcodeReader, HybridBinarizer, MultiFormatReader, RGBLuminanceSource;
-let multipleReader = null, decoderReady = null;
-function prepareDecoder() {
-  if (!decoderReady) decoderReady = import("https://esm.sh/@zxing/library@0.21.3").then(z => {
-    ({ BarcodeFormat, BinaryBitmap, DecodeHintType, GenericMultipleBarcodeReader, HybridBinarizer, MultiFormatReader, RGBLuminanceSource } = z);
-    const formats = [BarcodeFormat.CODE_128, BarcodeFormat.DATA_MATRIX, BarcodeFormat.QR_CODE, BarcodeFormat.CODE_39, BarcodeFormat.CODE_93, BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.ITF, BarcodeFormat.AZTEC, BarcodeFormat.PDF_417];
-    const hints = new Map([[DecodeHintType.POSSIBLE_FORMATS, formats], [DecodeHintType.TRY_HARDER, true]]);
-    const reader = new MultiFormatReader(); reader.setHints(hints);
-    multipleReader = new GenericMultipleBarcodeReader(reader);
-  });
-  return decoderReady;
-}
+let BarcodeFormat, BinaryBitmap, DecodeHintType, HybridBinarizer, MultiFormatReader, RGBLuminanceSource;
+let reader = null, zxingReady = false;
+const zxingReadyPromise = import("https://esm.sh/@zxing/library@0.21.3").then(module => {
+  ({BarcodeFormat, BinaryBitmap, DecodeHintType, HybridBinarizer, MultiFormatReader, RGBLuminanceSource} = module);
+  const formats = [BarcodeFormat.CODE_128, BarcodeFormat.DATA_MATRIX, BarcodeFormat.QR_CODE, BarcodeFormat.CODE_39, BarcodeFormat.CODE_93, BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.ITF, BarcodeFormat.AZTEC, BarcodeFormat.PDF_417];
+  const hints = new Map([[DecodeHintType.POSSIBLE_FORMATS, formats], [DecodeHintType.TRY_HARDER, true]]);
+  reader = new MultiFormatReader(); reader.setHints(hints); zxingReady = true;
+  const status = document.getElementById("liveStatus"); if (status) status.textContent = "ZXing 인식 엔진 준비됨 · 카메라를 시작하세요.";
+}).catch(error => {
+  console.error("ZXing-JS load failed", error);
+  const status = document.getElementById("liveStatus"); if (status) status.textContent = "인식 엔진 연결 실패 · 인터넷 연결을 확인하고 새로고침하세요.";
+});
 
 const $ = (id) => document.getElementById(id);
 const video = $("video"), overlay = $("overlay"), ctx = overlay.getContext("2d");
@@ -32,17 +30,7 @@ function openLocalDatabase() {
   return databasePromise;
 }
 async function saveLocalSnapshot() {
-  const db = await openLocalDatabase();
-  const snapshot = { id: "current", savedAt: Date.now(), results: JSON.parse(JSON.stringify(results)), photos: currentPhotos };
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction("snapshots", "readwrite");
-    tx.objectStore("snapshots").put(snapshot);
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error || new Error("기기에 저장하지 못했습니다."));
-    tx.onabort = () => reject(tx.error || new Error("기기 저장이 취소됐습니다."));
-  });
-  const status = $("storageStatus");
-  if (status) status.textContent = "이 휴대폰에 저장됨";
+  await saveWorkspace();
 }
 function scheduleLocalSave() {
   clearTimeout(persistenceTimer);
@@ -101,16 +89,16 @@ function makeLuminance(imageData, width, height) {
   return new BinaryBitmap(new HybridBinarizer(new RGBLuminanceSource(pixels, width, height)));
 }
 function decodeRegion(x, y, w, h) {
+  if (!zxingReady || !reader) return [];
   try {
     const data = scanCtx.getImageData(x, y, w, h);
-    return multipleReader.decodeMultiple(makeLuminance(data, w, h)).map(result => {
-      const points = result.getResultPoints() || [];
-      if (!points.length) return null;
+    const result = reader.decode(makeLuminance(data, w, h));
+    const points = result.getResultPoints() || [];
+      if (!points.length) return [];
       const xs = points.map(p => p.getX() + x), ys = points.map(p => p.getY() + y);
       let left = Math.min(...xs), right = Math.max(...xs), top = Math.min(...ys), bottom = Math.max(...ys);
       if (result.getBarcodeFormat() === BarcodeFormat.CODE_128 && bottom - top < 4) { const hh = Math.max(8, h * 0.025); top -= hh; bottom += hh; }
-      return { value: result.getText(), format: labelFormat(BarcodeFormat[result.getBarcodeFormat()]), left, top, right, bottom };
-    }).filter(Boolean);
+    return [{ value: result.getText(), format: labelFormat(BarcodeFormat[result.getBarcodeFormat()]), left, top, right, bottom }];
   } catch { return []; }
 }
 function decodeCanvas() {
@@ -208,17 +196,17 @@ function updateTracks(detections, now, gray, grayWidth, grayHeight, scale) {
   if (results.length !== resultCountBefore) scheduleLocalSave();
 }
 function canvasSize(canvas, rect) { const dpr = Math.min(devicePixelRatio || 1, 2); const w = Math.max(1,Math.round(rect.width*dpr)), h = Math.max(1,Math.round(rect.height*dpr)); if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;} return {w,h,dpr}; }
-function mapCover(box, sourceW, sourceH, destW, destH) {
-  const scale = Math.min(destW/sourceW, destH/sourceH); // video element uses object-fit: contain
+function mapCover(box, sourceW, sourceH, destW, destH, fit="contain") {
+  const scale = fit === "cover" ? Math.max(destW/sourceW, destH/sourceH) : Math.min(destW/sourceW, destH/sourceH);
   const ox = (destW-sourceW*scale)/2, oy = (destH-sourceH*scale)/2;
   return {left:ox+box.left*scale,top:oy+box.top*scale,right:ox+box.right*scale,bottom:oy+box.bottom*scale};
 }
-function drawOverlay(canvas, boxes, sourceW, sourceH) {
+function drawOverlay(canvas, boxes, sourceW, sourceH, fit="contain") {
   const rect = canvas.getBoundingClientRect(), {w,h,dpr} = canvasSize(canvas,rect), c=canvas.getContext("2d");
   c.clearRect(0,0,w,h); c.lineWidth=2*dpr; c.font=`bold ${12*dpr}px system-ui`;
   for (const track of boxes) {
     if (!track.stable) continue;
-    const b=mapCover(track.box,sourceW,sourceH,w,h), age=Date.now()-track.lastSeen;
+    const b=mapCover(track.box,sourceW,sourceH,w,h,fit), age=Date.now()-track.lastSeen;
     c.globalAlpha=Math.max(.25,1-age/KEEP_MS); c.strokeStyle="#12b76a"; c.fillStyle="#12b76a";
     c.strokeRect(b.left,b.top,b.right-b.left,b.bottom-b.top);
     const tag=`${track.id} ✓`; const tw=c.measureText(tag).width+10*dpr;
@@ -229,7 +217,8 @@ function drawOverlay(canvas, boxes, sourceW, sourceH) {
 async function scanFrame(now) {
   if (!running) return;
   raf=requestAnimationFrame(scanFrame);
-  if (!video.videoWidth || busy || now-lastScan<SCAN_MS) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1); return; }
+  if (typeof workspace !== "undefined" && !workspace.settings.auto) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1,"cover"); return; }
+  if (!video.videoWidth || busy || now-lastScan<SCAN_MS) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1,"cover"); return; }
   lastScan=now; busy=true;
   const scale=Math.min(1,MAX_FRAME_SIDE/Math.max(video.videoWidth,video.videoHeight));
   scanCanvas.width=Math.round(video.videoWidth*scale); scanCanvas.height=Math.round(video.videoHeight*scale);
@@ -241,29 +230,22 @@ async function scanFrame(now) {
     updateTracks(detections,Date.now(),gray,scanCanvas.width,scanCanvas.height,scale);
     setStatus(detections.length?`프레임 검출 ${detections.length} · 누적 ${results.length}`:"바코드 탐색 중");
   } finally { busy=false; }
-  drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight);
+  drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight,"cover");
   frames++; if(now-lastCountAt>=1000){$("fps").textContent=`${frames} fps`;frames=0;lastCountAt=now;}
 }
 async function startCamera() {
+  await zxingReadyPromise;
   requestPersistentStorage();
   try {
-    prepareDecoder().catch(error => setStatus("스캔 엔진 로딩 실패 · 인터넷 연결을 확인해 주세요."));
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("HTTPS 또는 localhost에서 열어야 카메라를 쓸 수 있습니다.");
     stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:facing},width:{ideal:1920},height:{ideal:1080}}});
     video.srcObject=stream; await video.play(); running=true; $("cameraPlaceholder").classList.add("hidden");
-    $("startCamera").disabled=true; $("stopCamera").disabled=false; $("flipCamera").disabled=false; setStatus("카메라 실행 중 · 스캔 엔진 준비 중");
+    $("startCamera").disabled=true; setStatus("카메라 실행 중");
     raf=requestAnimationFrame(scanFrame);
-  } catch(error) { setStatus(error.message||"카메라를 시작하지 못했습니다."); }
+    } catch(error) { setStatus(/device not found|requested device/i.test(error.message||"")?"이 기기에서 카메라를 찾지 못했어요. 갤러리에서 사진을 불러와 스캔할 수 있습니다.":error.message||"카메라를 시작하지 못했습니다."); }
 }
-function stopCamera() { running=false; cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(t=>t.stop()); stream=null; video.srcObject=null; tracks=[]; previousGray=null; previousScanMs=0; ctx.clearRect(0,0,overlay.width,overlay.height); $("startCamera").disabled=false; $("stopCamera").disabled=true; $("flipCamera").disabled=true; $("cameraPlaceholder").classList.remove("hidden"); setStatus("종료됨"); }
-function renderResults(persist = true) {
-  $("count").textContent=results.length;
-  const dm=results.filter(r=>r.format==="Data Matrix").length, c128=results.filter(r=>r.format==="Code 128").length;
-  $("formatCounts").textContent=`DM ${dm} · Code 128 ${c128}`;
-  const ordered=orderRightToLeftColumns(results);
-  $("resultList").innerHTML=ordered.map((r,i)=>`<li><span class="num">${i+1}.</span><span class="fmt">${escapeHtml(r.format)}</span><span>${escapeHtml(r.value)}</span></li>`).join("");
-  if (persist) scheduleLocalSave();
-}
+function stopCamera() { running=false; cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(t=>t.stop()); stream=null; video.srcObject=null; tracks=[]; previousGray=null; previousScanMs=0; ctx.clearRect(0,0,overlay.width,overlay.height); $("startCamera").disabled=false; $("cameraPlaceholder").classList.remove("hidden"); setStatus("카메라가 종료됐습니다."); }
+function renderResults() { if (typeof workspace !== "undefined") updateDraftSummary(); }
 function orderRightToLeftColumns(items) {
   const groups=new Map();for(const item of items){const key=item.photoIndex??-1;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
   return [...groups.entries()].sort((a,b)=>a[0]-b[0]).flatMap(([,group])=>orderOnePhotoRightToLeft(group));
@@ -272,27 +254,66 @@ function orderOnePhotoRightToLeft(items) {
   const placed=items.map((item,index)=>({...item,index,cx:(item.left+item.right)/2,cy:(item.top+item.bottom)/2})).sort((a,b)=>a.cy-b.cy||b.cx-a.cx);
   const columns=[];
   for(const item of placed){const tolerance=Math.max(28,Math.min((item.right-item.left)*.8,140));let best=null,delta=Infinity;for(const col of columns){const d=Math.abs(item.cx-col.items.reduce((sum,x)=>sum+x.cx,0)/col.items.length);if(d<=tolerance&&d<delta){best=col;delta=d;}}if(best)best.items.push(item);else columns.push({items:[item]});}
-  return columns.sort((a,b)=>b.items.reduce((s,x)=>s+x.cx,0)/b.items.length-a.items.reduce((s,x)=>s+x.cx,0)/a.items.length).flatMap(col=>col.items.sort((a,b)=>a.cy-b.cy||b.cx-a.cx));
+  const direction=workspace?.settings?.barcodeOrder==="ltr"?1:-1;
+  return columns.sort((a,b)=>direction*(a.items.reduce((s,x)=>s+x.cx,0)/a.items.length-b.items.reduce((s,x)=>s+x.cx,0)/b.items.length)).flatMap(col=>col.items.sort((a,b)=>a.cy-b.cy||direction*(a.cx-b.cx)));
 }
 function escapeHtml(value) { return value.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 async function scanPhoto(file) {
-  const img=$("photo"), url=URL.createObjectURL(file); img.src=url; await img.decode();
+  await zxingReadyPromise;
+  const img=new Image(), url=URL.createObjectURL(file); img.src=url; await img.decode();
   const scale=Math.min(1,2400/Math.max(img.naturalWidth,img.naturalHeight)); scanCanvas.width=Math.round(img.naturalWidth*scale); scanCanvas.height=Math.round(img.naturalHeight*scale); scanCtx.drawImage(img,0,0,scanCanvas.width,scanCanvas.height);
-  await prepareDecoder();
   const start=performance.now(), hits=decodeCanvas();
   URL.revokeObjectURL(url);
   return {file,hits,width:img.naturalWidth,height:img.naturalHeight,elapsedMs:Math.round(performance.now()-start),canvasWidth:scanCanvas.width,canvasHeight:scanCanvas.height};
 }
-$("startCamera").addEventListener("click",startCamera); $("stopCamera").addEventListener("click",stopCamera);
-$("flipCamera").addEventListener("click",async()=>{facing=facing==="environment"?"user":"environment";stopCamera();await startCamera();});
-$("clearResults").addEventListener("click",()=>{results=[];tracks=[];currentPhotos=[];nextId=1;$("photo").removeAttribute("src");ctx.clearRect(0,0,overlay.width,overlay.height);$("photoOverlay").getContext("2d").clearRect(0,0,$("photoOverlay").width,$("photoOverlay").height);$("photoStatus").textContent="사진은 이 브라우저 안에서만 처리됩니다.";renderResults();});
-$("copyResults").addEventListener("click",async()=>{await navigator.clipboard.writeText(orderRightToLeftColumns(results).map((r,i)=>`${i+1}\t${r.format}\t${r.value}`).join("\n"));});
-$("finishResults").addEventListener("click",()=>{const payload={type:"batchbarcode:results",version:1,items:orderRightToLeftColumns(results).map((r,index)=>({sequence:index+1,value:r.value,format:r.format,trackId:r.id,photoIndex:r.photoIndex==null?null:r.photoIndex+1,sourceName:r.sourceName||null}))};if(window.parent!==window)window.parent.postMessage(payload,location.origin);setStatus(window.parent===window?"결과를 정리했습니다. 전산 화면 안에서 열면 전달됩니다.":`전산 화면에 ${payload.items.length}개 결과를 전달했습니다.`);});
-$("exportCsv").addEventListener("click",()=>{const quote=x=>`"${String(x).replaceAll('"','""')}"`;const ordered=orderRightToLeftColumns(results);const csv="순번,사진,규격,바코드 값\r\n"+ordered.map((r,i)=>[i+1,r.photoIndex==null?"":r.photoIndex+1,r.format,r.value].map(quote).join(",")).join("\r\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob(["\ufeff",csv],{type:"text/csv;charset=utf-8"}));a.download="barcode-results.csv";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);});
-$("photoInput").addEventListener("change",async e=>{const files=[...(e.target.files||[])];if(!files.length)return;requestPersistentStorage();results=[];currentPhotos=files.map(file=>({name:file.name,type:file.type,blob:file,width:0,height:0}));let allHits=0,totalMs=0,last=null;try{for(let i=0;i<files.length;i++){const photo=await scanPhoto(files[i]);last=photo;totalMs+=photo.elapsedMs;currentPhotos[i].width=photo.width;currentPhotos[i].height=photo.height;for(const hit of photo.hits){results.push({id:nextId++,value:hit.value,format:hit.format,left:hit.left,top:hit.top,right:hit.right,bottom:hit.bottom,photoIndex:i,sourceName:photo.file.name,firstSeen:Date.now()});}allHits+=photo.hits.length;}renderResults();await saveLocalSnapshot();$("photoStatus").textContent=`사진 ${files.length}장 · ${allHits}개 위치 · ${totalMs} ms · 마지막 사진 ${last.width}×${last.height}px`;if(last)drawOverlay($("photoOverlay"),last.hits.map((h,i)=>({...h,id:i+1,box:h,stable:true,lastSeen:Date.now()})),last.canvasWidth,last.canvasHeight);}catch(err){$("photoStatus").textContent=`${err.message} · 저장 공간이 부족하면 사진 수를 줄여 주세요.`;}finally{e.target.value="";}});
-document.querySelectorAll(".tab").forEach(button=>button.addEventListener("click",()=>{document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b===button));$("livePanel").classList.toggle("hidden",button.dataset.mode!=="live");$("photoPanel").classList.toggle("hidden",button.dataset.mode!=="photo");}));
-window.addEventListener("resize",()=>{if(video.videoWidth)drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight);});
-window.addEventListener("pagehide",stopCamera);
-restoreLocalSnapshot();
-prepareDecoder().catch(error => setStatus("스캔 엔진 로딩 실패 · 인터넷 연결을 확인해 주세요."));
-if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) navigator.serviceWorker.register("./sw.js").catch(error => console.warn("Service worker registration failed", error));
+let workspace={documents:[],trash:[],draft:null,settings:{rotate:false,auto:true,sound:true,vibration:true,format:"xlsx",filenameFormat:"date_task",barcodeOrder:"rtl",ascii:false,trashDays:30}};
+let workspaceReady=false,workspaceReadyResolve;const workspaceReadyPromise=new Promise(resolve=>{workspaceReadyResolve=resolve;});
+let activeDocumentId=null, resultDocumentId=null, resultPhotoIndex=0, resultIsDraft=false, sortNewest=true, selectMode=false, selectedDocumentIds=new Set(), torchOn=false, toastTimer, barcodePage=0;
+let settingsReturnToScanner=false;
+const makeId=()=>`${Date.now()}-${Math.random().toString(36).slice(2,9)}`;
+const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+const formatBarcodeValue=value=>workspace?.settings?.ascii?String(value??"").replace(/\x1d/g,"[ASCII 29]"):String(value??"");
+function defaultDocumentName(){const date=new Date().toISOString().slice(0,10);switch(workspace.settings.filenameFormat){case"task_date":return`작업1_${date}`;case"custom":return"작업1";default:return`${date}_작업1`;}}
+function showScreen(id){document.querySelectorAll(".screen").forEach(s=>s.classList.toggle("active",s.id===id));}
+function toast(message){const el=$("toast");el.textContent=message;el.classList.remove("hidden");clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.add("hidden"),2400);}
+async function getWorkspace(){const db=await openLocalDatabase();return new Promise((resolve,reject)=>{const req=db.transaction("snapshots","readonly").objectStore("snapshots").get("workspace");req.onsuccess=()=>resolve(req.result?.workspace||null);req.onerror=()=>reject(req.error);});}
+async function saveWorkspace(){if(!workspaceReady)await workspaceReadyPromise;const db=await openLocalDatabase();await new Promise((resolve,reject)=>{const tx=db.transaction("snapshots","readwrite");tx.objectStore("snapshots").put({id:"workspace",savedAt:Date.now(),workspace});tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});$("storageStatus")&&($("storageStatus").textContent="이 기기에 저장됨");}
+function uniqueBarcodes(doc){const map=new Map();for(const [photoIndex,photo] of (doc.photos||[]).entries())for(const hit of photo.hits||[]){const key=`${hit.format}\u0000${hit.value}`;if(!map.has(key))map.set(key,{...hit,photoIndex});}return [...map.values()];}
+function updateDraftSummary(){const d=workspace.draft;if(!d)return;const count=d.photos.reduce((n,p)=>n+(p.hits?.length||0),0),unique=uniqueBarcodes(d).length;$("captureCount").innerHTML=`사진 ${d.photos.length}장<br />한 문서에 계속 추가`;$ ("scanSummary").textContent=`이번 문서 · 사진 ${d.photos.length}장 · 검출 ${count}개 · 고유 바코드 ${unique}개`;$ ("showDraftDetail").innerHTML=`현재 인식 바코드 목록<br /><small>문서 고유 ${unique}개</small>`;}
+function normalizeDraftResults(){results=[];let id=1;workspace.draft?.photos.forEach((photo,photoIndex)=>photo.hits.forEach(hit=>results.push({...hit,id:id++,photoIndex,sourceName:photo.name,firstSeen:Date.now()})));nextId=id;}
+function openDraft(){if(!workspace.draft)workspace.draft={id:makeId(),name:defaultDocumentName(),createdAt:Date.now(),photos:[]};normalizeDraftResults();renderResults();showScreen("scannerScreen");if(!running)startCamera();}
+function renderHistory(){const query=$("historySearch").value.trim().toLowerCase(),docs=workspace.documents.filter(d=>!d.deletedAt&&(!query||d.name.toLowerCase().includes(query))).sort((a,b)=>(sortNewest?-1:1)*(a.savedAt-b.savedAt));$("historyCount").textContent="저장된 문서 "+docs.length+"개";$("emptyHistory").classList.toggle("hidden",docs.length>0);$("toggleSelect").textContent=selectMode?"선택 완료":"선택";$("historyItems").innerHTML=docs.map(d=>'<div class="history-card"><input type="checkbox" data-select="'+esc(d.id)+'" '+(selectedDocumentIds.has(d.id)?"checked":"")+'><button data-open="'+esc(d.id)+'"><b>'+esc(d.name)+'.xlsx</b><small>'+new Date(d.savedAt).toLocaleString("ko-KR")+' · 사진 '+d.photos.length+'장 · 고유 바코드 '+uniqueBarcodes(d).length+'개</small></button></div>').join("");$("historySelection").classList.toggle("hidden",!selectMode);$("selectedCount").textContent=selectedDocumentIds.size+"개 선택";}
+function showCurrentPhotoResult(){if(!workspace.draft?.photos.length){toast("먼저 사진을 촬영하거나 불러오세요.");return;}resultIsDraft=true;resultPhotoIndex=workspace.draft.photos.length-1;renderPhotoResult();}
+function renderCurrentBarcodeList(){const d=workspace.draft;if(!d?.photos.length){toast("먼저 사진을 촬영하거나 불러오세요.");return;}stopCamera();const unique=orderRightToLeftColumns(uniqueBarcodes(d)),pageSize=3,pageCount=Math.max(1,Math.ceil(unique.length/pageSize));barcodePage=Math.max(0,Math.min(barcodePage,pageCount-1));$("currentUniqueCount").textContent=unique.length+"개";$("currentPhotoCount").textContent=`원본 사진 ${d.photos.length}장 유지`;$("barcodeRange").textContent=unique.length?`${barcodePage*pageSize+1}–${Math.min((barcodePage+1)*pageSize,unique.length)} / ${unique.length}개`:`0–0 / 0개`;$("barcodePageLabel").textContent=`${barcodePage+1} / ${pageCount} 페이지`;$("barcodePrevious").disabled=barcodePage===0;$("barcodeNext").disabled=barcodePage>=pageCount-1;const page=unique.slice(barcodePage*pageSize,(barcodePage+1)*pageSize);$("currentBarcodeItems").innerHTML=page.map((h,i)=>`<li><button data-hit-photo="${h.photoIndex}" data-hit-value="${esc(h.value)}" data-hit-format="${esc(h.format)}"><span class="hit-meta">${barcodePage*pageSize+i+1}　${esc(h.format)} <b>✓ 완료</b></span><span>${esc(formatBarcodeValue(h.value))}</span></button></li>`).join("")||"<li class=empty-barcode>아직 인식 완료한 바코드가 없습니다.</li>";$("barcodeListNotice").textContent="ⓘ　완료 상태는 계속 유지됩니다. 같은 데이터는 문서에 중복 추가하지 않습니다.";showScreen("barcodeListScreen");}
+function showDocumentSaveScreen(){if(!workspace.draft?.photos.length){toast("먼저 사진을 촬영해 주세요.");return;}stopCamera();$("documentFilename").value=workspace.draft.name||`스캔 ${new Date().toLocaleDateString("ko-KR")}`;document.querySelectorAll(".format-choice").forEach(b=>b.classList.toggle("selected",b.dataset.format===(workspace.settings.format||"xlsx")));$("filenameExtension").textContent=(workspace.settings.format||"xlsx")==="csv"?".csv":".xlsx";showScreen("documentSaveScreen");}
+function renderTrash(){const docs=workspace.trash||[];$("emptyTrash").classList.toggle("hidden",docs.length>0);$("trashItems").innerHTML=docs.map(d=>`<div class="history-card"><button data-restore="${esc(d.id)}"><b>${esc(d.name)}</b><small>${d.photos.length}장 · 복구하려면 누르세요</small></button><button data-delete="${esc(d.id)}">완전 삭제</button></div>`).join("");}
+function renderDetail(id){activeDocumentId=id;const d=workspace.documents.find(x=>x.id===id);if(!d)return;const ext=(workspace.settings.format||"xlsx")==="csv"?".csv":".xlsx",format=ext===".csv"?"CSV":"XLSX (Excel)";$("detailTitle").textContent=d.name+ext;$("detailDate").textContent="저장 "+new Date(d.savedAt).toLocaleString("ko-KR");$("detailSummary").textContent="사진 "+d.photos.length+"장     고유 바코드 "+uniqueBarcodes(d).length+"개";$("detailPhotoCount").textContent=d.photos.length+"장";$("detailBarcodeCount").textContent=uniqueBarcodes(d).length+"개";$("detailFileInfo").textContent=format+" · 파일 경로 /BatchBarcodeSnap/"+d.name+ext;$("detailPhotos").innerHTML=d.photos.map((p,i)=>'<button class="photo-tile" data-photo="'+i+'"><img src="'+URL.createObjectURL(p.blob)+'" alt=""><span>사진 '+(i+1)+'<br>감지 '+p.hits.length+'개 · 읽음 '+p.hits.length+'개</span></button>').join("");$("detailBarcodes").innerHTML=orderRightToLeftColumns(uniqueBarcodes(d)).map((h,i)=>'<li><span class="num">'+(i+1)+'.</span><span class="fmt">'+esc(h.format)+'</span><span>'+esc(formatBarcodeValue(h.value))+'</span></li>').join("");showScreen("detailScreen");}
+function renderPhotoResult(){const d=resultIsDraft?workspace.draft:workspace.documents.find(x=>x.id===resultDocumentId);if(!d)return;const p=d.photos[resultPhotoIndex];if(!p)return;stopCamera();const hits=orderOnePhotoRightToLeft(p.hits||[]);$("photoPosition").textContent=`사진 ${resultPhotoIndex+1} / ${d.photos.length}`;const url=URL.createObjectURL(p.blob);$("photoOriginalImage").src=url;$("photoResultImage").src=url;$("photoResultSummary").textContent=`읽음 ${hits.length}개  ·  충돌 0개  ·  미해독 후보 0개\n문서 전체: 사진 ${d.photos.length}장 · 고유 바코드 ${uniqueBarcodes(d).length}개`;$("photoResultList").innerHTML=hits.map((h,i)=>`<li><span class="num">${i+1}.</span><span class="fmt">${esc(h.format)} · ✓ 읽음</span><span>${esc(formatBarcodeValue(h.value))}</span></li>`).join("")||"<li>코드를 찾지 못했어요. 라벨을 더 가까이서 촬영해 주세요.</li>";requestAnimationFrame(()=>{const boxes=hits.map((h,i)=>({...h,id:i+1,box:h,stable:true,lastSeen:Date.now()}));drawOverlay($("photoResultOverlay"),boxes,p.scanWidth||p.width,p.scanHeight||p.height);});$("photoPrevious").disabled=resultPhotoIndex<=0;$("photoNext").disabled=resultPhotoIndex>=d.photos.length-1;showScreen("photoResultScreen");}
+async function exportDocument(doc){const safeName=doc.name.replace(/[\\/:*?"<>|]/g,"_");if((workspace.settings.format||"xlsx")==="csv"){const q=v=>`"${String(v??"").replaceAll('"','""')}"`;const rows=[["순번","사진","형식","바코드 값","왼쪽","위","오른쪽","아래"],...doc.photos.flatMap((p,pi)=>p.hits.map((h,i)=>[i+1,p.name,h.format,h.value,Math.round(h.left),Math.round(h.top),Math.round(h.right),Math.round(h.bottom)]))];const csv="\ufeff"+rows.map(row=>row.map(q).join(",")).join("\r\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));a.download=`${safeName}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500);return;}try{const XLSX=await import("https://esm.sh/xlsx@0.18.5");const wb=XLSX.utils.book_new();const all=doc.photos.flatMap((p,pi)=>p.hits.map((h,i)=>({photo:p.name,photoNo:pi+1,sequence:i+1,format:h.format,value:h.value,left:Math.round(h.left),top:Math.round(h.top),right:Math.round(h.right),bottom:Math.round(h.bottom)})));const unique=uniqueBarcodes(doc);XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(all.map((r,i)=>({"순번":i+1,"사진":r.photo,"형식":r.format,"바코드 값":r.value,"왼쪽":r.left,"위":r.top,"오른쪽":r.right,"아래":r.bottom}))),"사진별 기록");XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(unique.map((h,i)=>({"순번":i+1,"형식":h.format,"바코드 값":h.value}))),"고유 바코드");XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(all.map((r,i)=>({"순번":i+1,"사진 번호":r.photoNo,"사진":r.photo,"사진 내 순번":r.sequence,"형식":r.format,"바코드 값":r.value}))),"바코드별 기록");XLSX.writeFile(wb,`${safeName}.xlsx`);}
+catch(error){console.warn("XLSX export failed; using CSV",error);const q=v=>`"${String(v??"").replaceAll('"','""')}"`;const rows=[["순번","사진","형식","바코드 값"],...doc.photos.flatMap((p,pi)=>p.hits.map((h,i)=>[i+1,p.name,h.format,h.value]))];const csv="\ufeff"+rows.map(row=>row.map(q).join(",")).join("\r\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));a.download=`${safeName}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500);}}
+async function addPhotoFiles(files){if(!workspace.draft)workspace.draft={id:makeId(),name:defaultDocumentName(),createdAt:Date.now(),photos:[]};requestPersistentStorage();showScreen("scannerScreen");let total=0;try{for(const file of files){const photo=await scanPhoto(file),ratio=photo.width/photo.canvasWidth;const hits=photo.hits.map(h=>({...h,left:h.left*ratio,top:h.top*ratio,right:h.right*ratio,bottom:h.bottom*ratio}));workspace.draft.photos.push({id:makeId(),name:file.name||`사진 ${workspace.draft.photos.length+1}`,type:file.type,blob:file,width:photo.width,height:photo.height,scanWidth:photo.width,scanHeight:photo.height,hits,elapsedMs:photo.elapsedMs});total+=hits.length;}$("showDraftPhotoResult").textContent="마지막 촬영 · 인식 "+(workspace.draft.photos.at(-1)?.hits.length||0)+"개 · 결과 보기";normalizeDraftResults();renderResults();await saveWorkspace();toast(`${files.length}장 추가 · ${total}개 위치 인식`);}catch(e){toast(`사진 처리 실패: ${e.message}`);}}
+async function captureFrame(){if(!running||!video.videoWidth){toast("먼저 카메라를 시작하세요.");return;}const c=document.createElement("canvas"),rotate=workspace.settings.rotate;c.width=rotate?video.videoHeight:video.videoWidth;c.height=rotate?video.videoWidth:video.videoHeight;const x=c.getContext("2d");if(rotate){x.translate(c.width,0);x.rotate(Math.PI/2);}x.drawImage(video,0,0,video.videoWidth,video.videoHeight);const blob=await new Promise(resolve=>c.toBlob(resolve,"image/jpeg",.94));if(!blob){toast("사진을 만들지 못했습니다.");return;}if(workspace.settings.sound){try{const ac=new AudioContext(),osc=ac.createOscillator(),gain=ac.createGain();osc.frequency.value=880;gain.gain.value=.035;osc.connect(gain).connect(ac.destination);osc.start();osc.stop(ac.currentTime+.07);}catch{}}if(workspace.settings.vibration)navigator.vibrate?.(35);await addPhotoFiles([new File([blob],`촬영_${new Date().toISOString().replaceAll(":","-")}.jpg`,{type:"image/jpeg"})]);}
+async function applyTorch(){const track=stream?.getVideoTracks()[0];if(!track){toast("카메라를 먼저 시작하세요.");return;}try{await track.applyConstraints({advanced:[{torch:!torchOn}]});torchOn=!torchOn;$("torchButton").classList.toggle("active",torchOn);$("torchButton").innerHTML=`▯<small>손전등 ${torchOn?"ON":"OFF"}</small>`;}catch{toast("이 브라우저/카메라는 손전등 제어를 지원하지 않습니다.");}}
+async function getLegacySnapshot(){const db=await openLocalDatabase();return new Promise((resolve,reject)=>{const req=db.transaction("snapshots","readonly").objectStore("snapshots").get("current");req.onsuccess=()=>resolve(req.result||null);req.onerror=()=>reject(req.error);});}
+function migrateLegacySnapshot(legacy){if(!legacy?.photos?.length)return null;const photos=legacy.photos.map((p,index)=>({id:makeId(),name:p.name||("사진 "+(index+1)),type:p.type||"image/jpeg",blob:p.blob,width:p.width||0,height:p.height||0,scanWidth:p.width||0,scanHeight:p.height||0,hits:[]}));for(const hit of legacy.results||[]){const i=Number.isInteger(hit.photoIndex)?hit.photoIndex:Math.max(0,photos.length-1);if(!photos[i])continue;photos[i].hits.push({value:hit.value,format:hit.format,left:hit.left||0,top:hit.top||0,right:hit.right||0,bottom:hit.bottom||0});}return{id:makeId(),name:"이전 스캔 기록",createdAt:legacy.savedAt||Date.now(),savedAt:legacy.savedAt||Date.now(),photos};}
+async function initWorkspace(){let migrated=false;try{const stored=await getWorkspace();if(stored)workspace={...workspace,...stored,settings:{...workspace.settings,...stored.settings}};if(!workspace.documents?.length&&!workspace.trash?.length){const legacy=await getLegacySnapshot();const restored=migrateLegacySnapshot(legacy);if(restored){workspace.documents=[restored];migrated=true;}}}catch(e){console.error(e);toast("로컬 저장소를 열지 못했습니다.");}finally{workspaceReady=true;workspaceReadyResolve?.();}if(migrated)await saveWorkspace();$("autoScanSetting").checked=workspace.settings.auto;$("rotateSetting").checked=workspace.settings.rotate;$("soundSetting").checked=workspace.settings.sound;$("vibrationSetting").checked=workspace.settings.vibration;$("barcodeOrderSetting").value=workspace.settings.barcodeOrder||"rtl";$("asciiSetting").checked=!!workspace.settings.ascii;$("filenameFormatSetting").value=workspace.settings.filenameFormat||"date_task";$("exportFormatSetting").value=workspace.settings.format||"xlsx";$("trashDaysSetting").value=String(workspace.settings.trashDays||30);$("autoButton").classList.toggle("active",workspace.settings.auto);$("rotateButton").classList.toggle("active",workspace.settings.rotate);$("homeFormat").textContent=(workspace.settings.format||"xlsx")==="csv"?"CSV":"XLSX (Excel)";document.querySelectorAll(".format-choice").forEach(b=>b.classList.toggle("selected",b.dataset.format===(workspace.settings.format||"xlsx")));renderHistory();updateDraftSummary();}
+$("exitScanner").addEventListener("click",()=>{stopCamera();showScreen("homeScreen");});$("startCamera").addEventListener("click",startCamera);$("capturePhoto").addEventListener("click",captureFrame);$("torchButton").addEventListener("click",applyTorch);
+$("autoButton").addEventListener("click",async()=>{workspace.settings.auto=!workspace.settings.auto;$("autoButton").classList.toggle("active",workspace.settings.auto);$("autoButton").innerHTML=`◎<small>자동 인식 ${workspace.settings.auto?"ON":"OFF"}</small>`;await saveWorkspace();});$("rotateButton").addEventListener("click",async()=>{workspace.settings.rotate=!workspace.settings.rotate;$("rotateButton").classList.toggle("active",workspace.settings.rotate);await saveWorkspace();toast(`새 촬영 사진 ${workspace.settings.rotate?"90° 회전 보정 ON":"회전 보정 OFF"}`);});
+for(const [id,key] of [["autoScanSetting","auto"],["rotateSetting","rotate"],["soundSetting","sound"],["vibrationSetting","vibration"]])$(id).addEventListener("change",async e=>{workspace.settings[key]=e.target.checked;await saveWorkspace();$("autoButton").classList.toggle("active",workspace.settings.auto);$("rotateButton").classList.toggle("active",workspace.settings.rotate);});
+$("soundButton").addEventListener("click",async()=>{$("soundSetting").checked=!$("soundSetting").checked;$("soundSetting").dispatchEvent(new Event("change"));$("soundButton").innerHTML=`◖))<small>소리 ${workspace.settings.sound?"ON":"OFF"}</small>`;});$("vibrationButton").addEventListener("click",async()=>{$("vibrationSetting").checked=!$("vibrationSetting").checked;$("vibrationSetting").dispatchEvent(new Event("change"));$("vibrationButton").innerHTML=`◈<small>진동 ${workspace.settings.vibration?"ON":"OFF"}</small>`;});
+$("photoInput").addEventListener("change",async e=>{const files=[...(e.target.files||[])];e.target.value="";if(!files.length)return;if(activeDocumentId&&document.getElementById("detailScreen").classList.contains("active")){const d=workspace.documents.find(x=>x.id===activeDocumentId);if(d){showScreen("scannerScreen");workspace.draft=d;await addPhotoFiles(files);workspace.draft=null;await saveWorkspace();renderDetail(d.id);return;}}await addPhotoFiles(files);});
+$("saveDocument").addEventListener("click",showDocumentSaveScreen);
+$("historyBack").addEventListener("click",()=>showScreen("homeScreen"));$("historySearch").addEventListener("input",renderHistory);$("historySort").addEventListener("click",()=>{sortNewest=!sortNewest;$("historySort").textContent=sortNewest?"최근 저장순 ▾":"오래된순 ▾";renderHistory();});$("toggleSelect").addEventListener("click",()=>{selectMode=!selectMode;if(!selectMode)selectedDocumentIds.clear();renderHistory();});$("historyItems").addEventListener("click",e=>{const check=e.target.closest("[data-select]");if(check){if(check.checked){selectMode=true;selectedDocumentIds.add(check.dataset.select);}else{selectedDocumentIds.delete(check.dataset.select);if(!selectedDocumentIds.size)selectMode=false;}renderHistory();return;}const open=e.target.closest("[data-open]");if(open)renderDetail(open.dataset.open);});$("selectAll").addEventListener("change",e=>{document.querySelectorAll("[data-select]").forEach(c=>{c.checked=e.target.checked;if(e.target.checked)selectedDocumentIds.add(c.dataset.select);else selectedDocumentIds.delete(c.dataset.select);});renderHistory();});$("exportSelected").addEventListener("click",()=>[...selectedDocumentIds].forEach((id,i)=>{const d=workspace.documents.find(x=>x.id===id);setTimeout(()=>d&&exportDocument(d),i*350);}));$("shareSelected").addEventListener("click",async()=>{const names=[...selectedDocumentIds].map(id=>workspace.documents.find(x=>x.id===id)?.name).filter(Boolean);if(navigator.share)await navigator.share({title:"BatchBarcode Snap",text:names.join("\n")});else toast("선택한 파일을 저장한 뒤 공유 메뉴에서 공유하세요.");});$("deleteSelected").addEventListener("click",async()=>{if(!selectedDocumentIds.size)return;workspace.trash.unshift(...workspace.documents.filter(d=>selectedDocumentIds.has(d.id)).map(d=>({...d,deletedAt:Date.now()})));workspace.documents=workspace.documents.filter(d=>!selectedDocumentIds.has(d.id));selectedDocumentIds.clear();selectMode=false;await saveWorkspace();renderHistory();});
+$("openTrash").addEventListener("click",()=>{renderTrash();showScreen("trashScreen");});$("trashBack").addEventListener("click",()=>{renderHistory();showScreen("historyScreen");});$("trashItems").addEventListener("click",async e=>{const restore=e.target.closest("[data-restore]"),del=e.target.closest("[data-delete]");if(restore){const d=workspace.trash.find(x=>x.id===restore.dataset.restore);if(d){delete d.deletedAt;workspace.documents.unshift(d);workspace.trash=workspace.trash.filter(x=>x.id!==d.id);}await saveWorkspace();renderTrash();}if(del&&confirm("이 문서를 완전히 삭제할까요?")){workspace.trash=workspace.trash.filter(x=>x.id!==del.dataset.delete);await saveWorkspace();renderTrash();}});
+$("detailBack").addEventListener("click",()=>{renderHistory();showScreen("historyScreen");});$("detailPhotos").addEventListener("click",e=>{const tile=e.target.closest("[data-photo]");if(!tile)return;resultIsDraft=false;resultDocumentId=activeDocumentId;resultPhotoIndex=Number(tile.dataset.photo);renderPhotoResult();});$("photoBack").addEventListener("click",()=>{if(resultIsDraft){showScreen("scannerScreen");if(!running)startCamera();}else renderDetail(resultDocumentId);});$("photoPrevious").addEventListener("click",()=>{const d=resultIsDraft?workspace.draft:workspace.documents.find(x=>x.id===resultDocumentId);if(!d)return;resultPhotoIndex=Math.max(0,resultPhotoIndex-1);renderPhotoResult();});$("photoNext").addEventListener("click",()=>{const d=resultIsDraft?workspace.draft:workspace.documents.find(x=>x.id===resultDocumentId);if(!d)return;resultPhotoIndex=Math.min(d.photos.length-1,resultPhotoIndex+1);renderPhotoResult();});
+$("renameDocument").addEventListener("click",async()=>{const d=workspace.documents.find(x=>x.id===activeDocumentId),name=prompt("문서 이름",d?.name);if(d&&name!==null){d.name=name.trim()||d.name;await saveWorkspace();renderDetail(d.id);}});$("deleteDocument").addEventListener("click",async()=>{const d=workspace.documents.find(x=>x.id===activeDocumentId);if(!d)return;d.deletedAt=Date.now();workspace.documents=workspace.documents.filter(x=>x.id!==d.id);workspace.trash.unshift(d);await saveWorkspace();renderHistory();showScreen("historyScreen");});$("exportDocument").addEventListener("click",()=>{const d=workspace.documents.find(x=>x.id===activeDocumentId);if(d)exportDocument(d);});
+$("addMorePhotos").addEventListener("click",()=>{$("photoInput").click();});$("photoInput").setAttribute("multiple","");window.addEventListener("resize",()=>{if(video.videoWidth&&running)drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight,"cover");});window.addEventListener("pagehide",stopCamera);
+$("showDraftPhotoResult").addEventListener("click",()=>{if(!workspace.draft?.photos.length){toast("사진을 촬영하거나 불러오면 결과가 여기에 표시됩니다.");return;}resultIsDraft=true;resultPhotoIndex=workspace.draft.photos.length-1;renderPhotoResult();});
+$("returnToCamera").addEventListener("click",openDraft);$("saveFromResult").addEventListener("click",()=>{if(resultIsDraft)$("saveDocument").click();else renderDetail(resultDocumentId);});
+$("detailOpen").addEventListener("click",()=>{const d=workspace.documents.find(x=>x.id===activeDocumentId);if(d)exportDocument(d);});$("detailShare").addEventListener("click",()=>{const d=workspace.documents.find(x=>x.id===activeDocumentId);if(d)exportDocument(d);toast("파일을 저장한 뒤 휴대폰 공유 메뉴에서 공유할 수 있어요.");});
+$("newDocument").addEventListener("click",openDraft);$("homeSettings").addEventListener("click",()=>{settingsReturnToScanner=false;showScreen("settingsScreen");});$("scannerSettings").addEventListener("click",()=>{settingsReturnToScanner=true;stopCamera();showScreen("settingsScreen");});$("settingsBack").addEventListener("click",()=>{if(settingsReturnToScanner){settingsReturnToScanner=false;openDraft();}else showScreen("homeScreen");});$("openHistory").addEventListener("click",()=>{stopCamera();renderHistory();showScreen("historyScreen");});
+$("scanSummary").addEventListener("click",showCurrentPhotoResult);$("scanSummary").addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();showCurrentPhotoResult();}});$("showDraftDetail").addEventListener("click",renderCurrentBarcodeList);
+$("barcodeListBack").addEventListener("click",()=>{showScreen("scannerScreen");if(!running)startCamera();});$("barcodeReturnCamera").addEventListener("click",()=>{showScreen("scannerScreen");if(!running)startCamera();});$("barcodePrevious").addEventListener("click",()=>{barcodePage=Math.max(0,barcodePage-1);renderCurrentBarcodeList();});$("barcodeNext").addEventListener("click",()=>{barcodePage++;renderCurrentBarcodeList();});$("currentBarcodeItems").addEventListener("click",e=>{const row=e.target.closest("[data-hit-photo]");if(!row)return;resultIsDraft=true;resultPhotoIndex=Number(row.dataset.hitPhoto);renderPhotoResult();});
+$("documentSaveBack").addEventListener("click",()=>{showScreen("scannerScreen");if(!running)startCamera();});document.querySelectorAll(".format-choice").forEach(button=>button.addEventListener("click",async()=>{workspace.settings.format=button.dataset.format;document.querySelectorAll(".format-choice").forEach(x=>x.classList.toggle("selected",x===button));$("filenameExtension").textContent=button.dataset.format==="csv"?".csv":".xlsx";await saveWorkspace();}));$("confirmSaveDocument").addEventListener("click",async()=>{const d=workspace.draft;if(!d?.photos.length){toast("저장할 사진이 없습니다.");return;}d.name=$("documentFilename").value.trim()||d.name;d.savedAt=Date.now();workspace.documents.unshift(d);workspace.draft=null;await saveWorkspace();renderHistory();showScreen("historyScreen");toast("문서를 이 기기에 저장했습니다.");});
+$("barcodeOrderSetting").addEventListener("change",async e=>{workspace.settings.barcodeOrder=e.target.value;await saveWorkspace();});$("asciiSetting").addEventListener("change",async e=>{workspace.settings.ascii=e.target.checked;await saveWorkspace();});$("filenameFormatSetting").addEventListener("change",async e=>{workspace.settings.filenameFormat=e.target.value;await saveWorkspace();});$("exportFormatSetting").addEventListener("change",async e=>{workspace.settings.format=e.target.value;$("homeFormat").textContent=e.target.value==="csv"?"CSV":"XLSX (Excel)";await saveWorkspace();});$("trashDaysSetting").addEventListener("change",async e=>{workspace.settings.trashDays=Number(e.target.value);await saveWorkspace();});initWorkspace();
+if("serviceWorker"in navigator&&(location.protocol==="https:"||location.hostname==="localhost"))navigator.serviceWorker.register("./sw.js").catch(error=>console.warn("Service worker registration failed",error));

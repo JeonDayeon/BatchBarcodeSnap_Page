@@ -1,6 +1,6 @@
 {
   "id": "./",
-  "name": "BatchBarcode 웹 스캐너",
+  "name": "BatchBarcode Snap",
   "short_name": "BatchBarcode",
   "description": "휴대폰에서 사진과 실시간 바코드를 스캔하고 기기에 저장합니다.",
   "lang": "ko-KR",
