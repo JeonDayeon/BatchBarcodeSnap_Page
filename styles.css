@@ -22,3 +22,4 @@
 .camera-start:disabled{display:none}
 .screen:not(.scanner-screen){width:min(100%,360px);margin-left:auto;margin-right:auto}
 .setting-row select{max-width:132px;min-height:36px;border:1px solid #d0d5dd;border-radius:7px;background:#fff;color:#344054;padding:4px 8px;font:inherit;font-size:12px}
+.info-box{padding:12px;font-size:11px;line-height:1.4;letter-spacing:-.2px}

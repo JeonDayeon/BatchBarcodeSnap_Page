@@ -1,4 +1,4 @@
-const CACHE_NAME = "batchbarcode-shell-v13";
+const CACHE_NAME = "batchbarcode-shell-v14";
 const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./manifest.webmanifest", "./icon.svg", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 
 self.addEventListener("install", event => {
