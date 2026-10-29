@@ -1,4 +1,4 @@
-import { installWebParity } from "./web-parity.js?v=19";
+import { installWebParity } from "./web-parity.js?v=20";
 import { decodePhotoFile } from "./photo-decoder.js?v=19";
 import { decodeLiveFrame, stopLiveDecoder } from "./live-decoder.js?v=19";
 import { captureCameraPhoto } from "./camera-photo.js?v=19";
@@ -252,8 +252,8 @@ async function scanFrame(now) {
   raf=requestAnimationFrame(scanFrame);
   if (photoProcessing) return;
   if(liveEngineFallback&&!zxingReady){setStatus("실시간 인식기를 준비하지 못했습니다. 새로고침하거나 사진 불러오기를 사용해 주세요.");return;}
-  if (typeof workspace !== "undefined" && !workspace.settings.auto) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1,"cover"); return; }
-  if (!video.videoWidth || busy || now-lastScan<SCAN_MS) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1,"cover"); return; }
+  if (typeof workspace !== "undefined" && !workspace.settings.auto) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1,"contain"); return; }
+  if (!video.videoWidth || busy || now-lastScan<SCAN_MS) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1,"contain"); return; }
   lastScan=now; busy=true;const requestId=cameraRequestId;
   const sourceWidth=video.videoWidth,sourceHeight=video.videoHeight,scale=Math.min(1,MAX_FRAME_SIDE/Math.max(sourceWidth,sourceHeight));
   const width=Math.round(sourceWidth*scale),height=Math.round(sourceHeight*scale);
@@ -279,7 +279,7 @@ async function scanFrame(now) {
   } catch(error) {
     if(error.name!=="AbortError"&&requestId===cameraRequestId&&running){console.error("Live decode failed",error);liveEngineFallback=true;setStatus("실시간 인식 엔진 연결 실패 · 기본 인식으로 다시 찾습니다.");}
   } finally { busy=false; }
-  drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight,"cover");
+  drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight,"contain");
   frames++; if(now-lastCountAt>=1000){$("fps").textContent=`${frames} fps`;frames=0;lastCountAt=now;}
 }
 async function startCamera() {
@@ -499,7 +499,7 @@ $("historyBack").addEventListener("click",()=>showScreen("homeScreen"));$("histo
 $("openTrash").addEventListener("click",()=>{renderTrash();showScreen("trashScreen");});$("trashBack").addEventListener("click",()=>{renderHistory();showScreen("historyScreen");});$("trashItems").addEventListener("click",async e=>{const restore=e.target.closest("[data-restore]"),del=e.target.closest("[data-delete]");if(restore){const d=workspace.trash.find(x=>x.id===restore.dataset.restore);if(d){delete d.deletedAt;workspace.documents.unshift(d);workspace.trash=workspace.trash.filter(x=>x.id!==d.id);}await saveWorkspace();renderTrash();}if(del&&confirm("이 문서를 완전히 삭제할까요?")){workspace.trash=workspace.trash.filter(x=>x.id!==del.dataset.delete);await saveWorkspace();renderTrash();}});
 $("detailBack").addEventListener("click",()=>{renderHistory();showScreen("historyScreen");});$("detailPhotos").addEventListener("click",e=>{const tile=e.target.closest("[data-photo]");if(!tile)return;resultIsDraft=false;resultDocumentId=activeDocumentId;resultPhotoIndex=Number(tile.dataset.photo);renderPhotoResult();});$("photoBack").addEventListener("click",()=>{if(resultIsDraft){resumeCameraView();}else renderDetail(resultDocumentId);});$("photoPrevious").addEventListener("click",()=>{const d=resultIsDraft?workspace.draft:workspace.documents.find(x=>x.id===resultDocumentId);if(!d)return;resultPhotoIndex=Math.max(0,resultPhotoIndex-1);renderPhotoResult();});$("photoNext").addEventListener("click",()=>{const d=resultIsDraft?workspace.draft:workspace.documents.find(x=>x.id===resultDocumentId);if(!d)return;resultPhotoIndex=Math.min(d.photos.length-1,resultPhotoIndex+1);renderPhotoResult();});
 $("renameDocument").addEventListener("click",async()=>{const d=workspace.documents.find(x=>x.id===activeDocumentId),name=prompt("문서 이름",d?.name);if(d&&name!==null){d.name=name.trim()||d.name;await saveWorkspace();renderDetail(d.id);}});$("deleteDocument").addEventListener("click",async()=>{const d=workspace.documents.find(x=>x.id===activeDocumentId);if(!d)return;d.deletedAt=Date.now();workspace.documents=workspace.documents.filter(x=>x.id!==d.id);workspace.trash.unshift(d);await saveWorkspace();renderHistory();showScreen("historyScreen");});$("exportDocument").addEventListener("click",()=>{const d=workspace.documents.find(x=>x.id===activeDocumentId);if(d)exportDocument(d);});
-$("addMorePhotos").addEventListener("click",()=>{$("photoInput").click();});$("photoInput").setAttribute("multiple","");window.addEventListener("resize",()=>{if(video.videoWidth&&running)drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight,"cover");});window.addEventListener("pagehide",stopCamera);
+$("addMorePhotos").addEventListener("click",()=>{$("photoInput").click();});$("photoInput").setAttribute("multiple","");window.addEventListener("resize",()=>{if(video.videoWidth&&running)drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight,"contain");});window.addEventListener("pagehide",stopCamera);
 $("showDraftPhotoResult").addEventListener("click",showCurrentPhotoResult);
 $("returnToCamera").addEventListener("click",()=>{const d=resultIsDraft?workspace.draft:workspace.documents.find(x=>x.id===resultDocumentId);if(resultIsDraft)openDraft();else if(d)openDocumentCamera(d);});$("saveFromResult").addEventListener("click",()=>{const d=resultIsDraft?workspace.draft:workspace.documents.find(x=>x.id===resultDocumentId);if(d)showDocumentSaveScreen(d);});
 $("detailOpen").addEventListener("click",()=>{const d=workspace.documents.find(x=>x.id===activeDocumentId);if(d)exportDocument(d);});$("detailShare").addEventListener("click",()=>{const d=workspace.documents.find(x=>x.id===activeDocumentId);if(d)exportDocument(d);toast("파일을 저장한 뒤 휴대폰 공유 메뉴에서 공유할 수 있어요.");});

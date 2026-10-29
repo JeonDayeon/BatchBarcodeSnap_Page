@@ -301,16 +301,17 @@ export function installWebParity(api) {
       annotations.width=Math.max(1,Math.round(w*dpr));annotations.height=Math.max(1,Math.round(h*dpr));
       const c=annotations.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,w,h);if(!withOverlay||!w||!h)return;
       const factor=fit()*scale,sx=canvas.width/sourceWidth*factor,sy=canvas.height/sourceHeight*factor,ox=w/2-canvas.width*factor/2+x,oy=h/2-canvas.height*factor/2+y;
-      c.lineWidth=2;c.font='bold 12px system-ui';
+      const badgeScale=Math.min(1,.65*scale),badgeHeight=20*badgeScale,pad=5*badgeScale;
+      c.lineWidth=1.5;c.font=`bold ${12*badgeScale}px system-ui`;
       hits.forEach((hit,i)=>{
         if(![hit.left,hit.top,hit.right,hit.bottom].every(Number.isFinite)||[hit.left,hit.top,hit.right,hit.bottom].every(v=>v===0))return;
         const left=ox+Math.min(hit.left,hit.right)*sx,top=oy+Math.min(hit.top,hit.bottom)*sy;
-        const actualW=Math.abs(hit.right-hit.left)*sx,actualH=Math.abs(hit.bottom-hit.top)*sy,bw=Math.max(18,actualW),bh=Math.max(18,actualH);
+        const actualW=Math.abs(hit.right-hit.left)*sx,actualH=Math.abs(hit.bottom-hit.top)*sy,bw=Math.max(8,actualW),bh=Math.max(8,actualH);
         const bx=left-(bw-actualW)/2,by=top-(bh-actualH)/2,marker=photoMarker(hit,i,i===focusIndex);
         if(bx+bw<0||by+bh<0||bx>w||by>h)return;
         c.strokeStyle=marker.color;c.strokeRect(bx,by,bw,bh);
-        const textWidth=c.measureText(marker.label).width+10,tx=Math.max(0,Math.min(w-textWidth,bx)),ty=Math.max(0,Math.min(h-20,by-21));
-        c.fillStyle=marker.color;c.fillRect(tx,ty,textWidth,20);c.fillStyle='#fff';c.fillText(marker.label,tx+5,ty+14);
+        const textWidth=c.measureText(marker.label).width+pad*2,tx=Math.max(0,Math.min(w-textWidth,bx)),ty=Math.max(0,Math.min(h-badgeHeight,by-badgeHeight-1));
+        c.fillStyle=marker.color;c.fillRect(tx,ty,textWidth,badgeHeight);c.fillStyle='#fff';c.fillText(marker.label,tx+pad,ty+badgeHeight*.72);
       });
     }
     let scale=1,x=0,y=0;const pointers=new Map();let gesture=null;

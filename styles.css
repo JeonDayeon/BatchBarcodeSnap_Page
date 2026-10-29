@@ -4,7 +4,7 @@
 #startCamera:disabled{display:none}.scanner-controls{justify-content:space-around}.mini-toggle{flex:1}.shutter{font-size:25px}
 #historySelection{order:5;margin-top:auto;position:sticky;bottom:0;flex-wrap:wrap;box-shadow:0 -2px 12px #10182812}#historyItems{order:2}#emptyHistory{order:3}.selection-bar .danger-button{width:auto;margin:0}.selection-bar .small-button{min-width:55px;padding:6px 9px}.history-card>input[type=checkbox]{width:20px;height:20px;flex:none}
 /* Keep scan interaction order and spatial preview aligned with the Android screen. */
-.camera video{object-fit:cover}
+.camera video{object-fit:contain}
 .scan-summary{min-height:26px;display:flex;align-items:center;cursor:pointer}
 .scanner-divider{height:1px;background:#344054;width:min(100%,430px);flex:none}
 .capture-row{display:grid;grid-template-columns:minmax(0,1fr) 72px minmax(0,1fr);justify-items:stretch;position:relative}
