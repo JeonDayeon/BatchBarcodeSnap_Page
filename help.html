@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#175cd3" />
+  <title>사용방법 · BatchBarcode Snap</title>
+  <meta name="description" content="사진 선택부터 바코드 확인, 문서 저장과 파일 공유까지 처음 사용하는 분을 위한 안내입니다." />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./help.css?v=web17" />
+  <script src="./help.js?v=web17" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#steps">사용 순서로 바로 가기</a>
+  <header class="guide-header">
+    <a class="brand" href="./?v=web17" aria-label="BatchBarcode Snap 홈으로">BatchBarcode Snap</a>
+    <a class="header-link" href="./?v=web17">웹앱 열기 <span aria-hidden="true">↗</span></a>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="guide-title">
+      <span class="eyebrow">처음 사용하는 분을 위한 안내</span>
+      <h1 id="guide-title">사진을 고르고,<br />확인한 뒤 저장하세요.</h1>
+      <p>한 장에 있는 여러 바코드를 읽고,<br class="wide-break" /> 사진과 인식 결과를 작업별로 보관하는 웹앱입니다.</p>
+      <ol class="quick-flow" aria-label="전체 작업 순서">
+        <li><span aria-hidden="true"><svg class="guide-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg></span>사진 선택</li>
+        <li><span aria-hidden="true">✓</span>결과 확인</li>
+        <li><span aria-hidden="true">↓</span>저장·공유</li>
+      </ol>
+      <div class="intro-actions">
+        <a class="button primary" href="./?v=web17">웹앱에서 시작하기 <span aria-hidden="true">→</span></a>
+        <button class="button subtle" id="shareGuide" type="button">안내 링크 공유</button>
+      </div>
+      <p class="share-status" id="shareStatus" role="status" aria-live="polite"></p>
+    </section>
+
+    <nav class="jump-links" aria-label="필요한 설명 바로 보기">
+      <a href="#photo">사진 선택</a><a href="#result">결과 확인</a><a href="#save">저장</a><a href="#share">파일 공유</a><a href="#questions">자주 묻는 질문</a>
+    </nav>
+
+    <div class="steps" id="steps">
+      <section class="step" id="photo" aria-labelledby="photo-title">
+        <span class="step-number" aria-hidden="true">1</span>
+        <div class="step-body">
+          <p class="step-kicker">이미 찍어 둔 사진이 있을 때</p>
+          <h2 id="photo-title">사진을 불러오세요</h2>
+          <p>홈에서 <strong>사진에서 바코드 인식</strong>을 누르고, 휴대폰 사진첩에서 라벨 사진을 선택하세요. 여러 장을 한꺼번에 선택해도 됩니다.</p>
+          <div class="button-sample"><span aria-hidden="true"><svg class="guide-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></svg></span><span><b>사진에서 바코드 인식</b><small>홈에서 이 버튼을 찾으세요</small></span></div>
+          <p class="small-note">선택한 사진은 한 작업에 모입니다. 인식이 끝나면 <strong>사진 인식 결과</strong> 화면으로 자동 이동합니다. 여러 장을 골랐다면 결과 화면의 이전·다음 버튼으로 사진별 결과를 확인하세요.</p>
+        </div>
+      </section>
+
+      <section class="step" id="camera" aria-labelledby="camera-title">
+        <span class="step-number" aria-hidden="true">2</span>
+        <div class="step-body">
+          <p class="step-kicker">지금 새로 찍을 때만</p>
+          <h2 id="camera-title">카메라로 촬영할 수도 있어요</h2>
+          <p>홈의 <strong>바코드 촬영 및 스캔</strong>을 누르세요. 카메라 권한을 묻는 창이 나오면 <strong>허용</strong>하고, 라벨에 초점을 맞춘 뒤 아래의 <strong>둥근 촬영 버튼</strong>을 누르세요.</p>
+          <div class="capture-sample" aria-label="촬영 화면 아래의 둥근 카메라 버튼을 누릅니다"><span>사진 수</span><span class="shutter-sample" aria-hidden="true"><svg class="guide-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5 6 8H3v12h18V8h-3l-2-3Z"/><circle cx="12" cy="13" r="4"/></svg></span><span>사진 불러오기</span></div>
+          <p class="small-note">촬영 화면의 <strong>사진 불러오기</strong>로 사진첩을 열 수도 있어요. 카메라를 사용할 수 없는 기기에서는 사진 불러오기를 이용하세요.</p>
+        </div>
+      </section>
+
+      <section class="step" id="result" aria-labelledby="result-title">
+        <span class="step-number" aria-hidden="true">3</span>
+        <div class="step-body">
+          <p class="step-kicker">저장하기 전에 꼭 확인</p>
+          <h2 id="result-title">사진 속 위치와 읽은 값을 확인하세요</h2>
+          <p><strong>사진 인식 결과</strong>에서 사진에 표시된 바코드 위치와 아래의 읽은 값을 비교하세요. 사진이나 결과 항목을 누르면 크게 볼 수 있습니다.</p>
+          <div class="result-sample" aria-label="사진의 초록 표시와 아래 데이터가 서로 맞는지 확인합니다"><div class="label-sample"><span class="sample-tag">1 ✓</span><span class="barcode-sample" aria-hidden="true"></span></div><div class="read-sample"><span>1 · 읽음</span><b>사진의 값과 비교하세요</b></div></div>
+          <dl class="count-meaning"><div><dt>사진의 읽음 개수</dt><dd>그 사진에서 값을 읽은 바코드 위치 수</dd></div><div><dt>문서 고유 바코드</dt><dd>여러 사진에서 같은 데이터는 한 번만 센 수</dd></div></dl>
+          <p class="small-note">두 개수가 달라도 오류라는 뜻은 아닙니다. 같은 바코드 데이터가 여러 곳에 반복될 수 있어요.</p>
+        </div>
+      </section>
+
+      <section class="step" id="check" aria-labelledby="check-title">
+        <span class="step-number" aria-hidden="true">4</span>
+        <div class="step-body">
+          <p class="step-kicker">사진이 눕거나 코드가 빠졌을 때</p>
+          <h2 id="check-title">방향을 맞추고 다시 확인하세요</h2>
+          <ul class="action-list">
+            <li><span class="inline-button">사진 90° 회전</span><span>사진 방향과 표시 위치를 함께 돌립니다.</span></li>
+            <li><span class="inline-button">다시 인식</span><span>같은 사진을 다시 분석합니다.</span></li>
+            <li><span class="inline-button">카메라로 돌아가기</span><span>같은 작업에 새 사진을 더 찍을 수 있습니다.</span></li>
+          </ul>
+          <div class="tip"><b>다시 찍으면 도움이 되는 경우</b><p>글자가 흐리거나 빛이 반사될 때는 라벨에 조금 더 가까이 가서 정면으로 찍어 주세요. 바코드 양끝과 주변 여백이 잘리지 않게 해 주세요.</p></div>
+        </div>
+      </section>
+
+      <section class="step" id="save" aria-labelledby="save-title">
+        <span class="step-number" aria-hidden="true">5</span>
+        <div class="step-body">
+          <p class="step-kicker">나중에 다시 보려면</p>
+          <h2 id="save-title">이름을 정해서 작업을 저장하세요</h2>
+          <p>결과 화면에서 <strong>작업 저장</strong> 또는 촬영 화면에서 <strong>저장</strong>을 누르세요. 알아보기 쉬운 파일명을 입력하고 저장 형식을 선택한 뒤 <strong>저장하기</strong>를 누릅니다.</p>
+          <div class="filename-sample"><span>파일명</span><b>2026-10-29_입고확인</b><small>.xlsx</small></div>
+          <p>저장 후에는 홈의 <strong>저장된 목록</strong>에서 문서를 열 수 있습니다. 문서 안의 사진을 누르면 사진별 결과가 다시 나옵니다.</p>
+          <p class="small-note">문서 상세의 <strong>＋ 사진 추가</strong>로 같은 작업에 사진을 더 넣을 수 있어요.</p>
+        </div>
+      </section>
+
+      <section class="step" id="share" aria-labelledby="share-title">
+        <span class="step-number" aria-hidden="true">6</span>
+        <div class="step-body">
+          <p class="step-kicker">담당자에게 결과를 보낼 때</p>
+          <h2 id="share-title">파일을 저장하거나 공유하세요</h2>
+          <p>저장된 문서를 열고 아래 버튼을 이용하세요.</p>
+          <div class="export-options"><div><span class="inline-button">↓ 저장</span><p>엑셀 또는 CSV 파일을 기기에 내려받습니다.</p></div><div><span class="inline-button">공유</span><p>파일을 만드는 동안 기다리세요. <strong>문서 파일 공유</strong> 창이 열리면 <strong>파일 공유</strong>를 직접 누르고, 보낼 앱과 받는 사람을 고릅니다.</p></div></div>
+          <p class="small-note"><strong>파일 공유</strong>가 비활성화되거나 공유 창이 열리지 않으면 같은 창의 <strong>파일 저장</strong>을 누르세요. 내려받은 파일을 메신저나 메일에 첨부해 보내면 됩니다.</p>
+          <div class="storage-note"><b>다른 사람에게 전달하려면 파일로 내보내세요</b><p>웹주소를 보내는 것만으로 저장된 작업이 전달되지는 않습니다. 작업 기록은 사용한 기기와 브라우저에 저장됩니다. 중요한 결과는 파일로 내보내고, 원본 사진도 사진첩에 따로 보관하세요.</p></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="questions" id="questions" aria-labelledby="questions-title">
+      <p class="eyebrow">막히는 부분이 있나요?</p><h2 id="questions-title">자주 묻는 질문</h2>
+      <details><summary>아무것도 인식되지 않아요</summary><p>결과 화면에서 <strong>다시 인식</strong>을 눌러 보세요. 사진이 흐리거나 바코드가 작게 찍혔다면 더 가까이서 다시 촬영하세요. 원래 코드 개수와 사진의 읽음 개수를 비교해 누락 여부를 확인해 주세요.</p></details>
+      <details><summary>카메라가 열리지 않아요</summary><p>사진 불러오기는 카메라 없이도 사용할 수 있습니다. 촬영하려면 브라우저에서 이 웹사이트의 카메라 사용을 허용해야 합니다. 이미 거부했다면 브라우저의 해당 사이트 권한에서 허용한 뒤 웹앱을 다시 열어 주세요.</p></details>
+      <details><summary>웹에서도 바코드가 공간에 고정되나요?</summary><p>웹 버전은 카메라 화면의 표시와 사진별 결과를 제공합니다. 휴대폰을 움직여도 물리적 위치에 고정되는 AR 공간 추적은 제공하지 않습니다. 최종 결과는 촬영한 사진에서 확인해 주세요.</p></details>
+      <details><summary>다른 휴대폰에서 저장된 작업이 안 보여요</summary><p>작업은 현재 브라우저에 저장됩니다. 다른 기기로 자동 동기화되지 않습니다. 이전 기기에서 결과를 파일로 내보내 전달해 주세요.</p></details>
+      <details><summary>저장한 파일이 어디 있는지 모르겠어요</summary><p>휴대폰의 <strong>파일</strong> 앱 또는 브라우저의 <strong>다운로드</strong> 목록을 확인하세요. 문서를 작업 목록에 저장하는 것과 파일을 다운로드하는 것은 별도입니다. 외부 파일이 필요하면 문서 상세에서 <strong>↓ 저장</strong>을 누르세요.</p></details>
+      <details><summary>사용한 브라우저의 데이터를 지워도 되나요?</summary><p>브라우저 데이터를 지우면 저장된 문서와 사진 기록도 사라질 수 있습니다. 중요한 결과를 먼저 파일로 내보내고 원본 사진을 따로 보관해 주세요.</p></details>
+    </section>
+
+    <section class="ready"><div><span class="eyebrow">이제 시작해 볼까요?</span><h2>첫 사진 한 장부터 해보세요.</h2></div><a class="button primary" href="./?v=web17">웹앱 열기 <span aria-hidden="true">→</span></a></section>
+  </main>
+  <footer class="guide-footer"><span>BatchBarcode Snap · 사용방법</span><button id="printGuide" type="button">인쇄 / PDF로 보관</button></footer>
+</body>
+</html>

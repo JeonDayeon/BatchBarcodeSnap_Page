@@ -1,0 +1,7 @@
+zxing-wasm 3.1.6 (MIT): https://github.com/Sec-ant/zxing-wasm
+Files: reader.js, share.js, zxing_reader.wasm. The reader module's share import
+was adjusted to ./share.js for this directory layout. See LICENSE.
+
+The WebAssembly binary contains zxing-cpp (Apache-2.0):
+https://github.com/zxing-cpp/zxing-cpp
+See ZXING-CPP-LICENSE. Original third-party license notices are retained.

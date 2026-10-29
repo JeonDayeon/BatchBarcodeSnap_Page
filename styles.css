@@ -67,8 +67,11 @@ button:disabled{cursor:default;opacity:.45}
 #historyItems,#trashItems,#currentBarcodeItems{flex:1;min-height:0;overflow:auto}
 .photo-result-screen .barcode-list{min-height:0;flex:1;overflow:auto;margin-block:0}
 .photo-preview-column>img,.photo-preview-column .photo-result-image{height:min(25dvh,210px)}
-.photo-result-screen .barcode-list li{display:grid;grid-template-columns:24px 1fr;gap:4px;padding:10px 0}
-.photo-result-screen .barcode-list li>span:last-child{grid-column:2;overflow-wrap:anywhere;white-space:pre-wrap}
+.photo-result-screen .barcode-list li{display:block;min-width:0;width:100%;padding:10px 0;line-height:1.6;word-break:keep-all;overflow-wrap:anywhere}
+.photo-result-screen .barcode-list li>.num{display:inline-block;min-width:24px;width:24px;vertical-align:top}
+.photo-result-screen .barcode-list li>.fmt{display:inline;min-width:0}
+.photo-result-screen .barcode-list li>span:last-child:not(.num):not(.fmt){display:block;margin-left:28px;overflow-wrap:anywhere;white-space:pre-wrap;word-break:normal}
+#photoResultSummary{flex:none;margin:8px 14px;white-space:pre-line;line-height:1.55;font-size:13px;word-break:keep-all;overflow-wrap:anywhere}
 .photo-result-screen .detail-footer{min-height:64px}
 @media(min-width:700px){:root{--screen-height:calc(100dvh - 36px - env(safe-area-inset-top) - env(safe-area-inset-bottom))}}
 .screen:not(.scanner-screen) .secondary-button{color:#175cd3;background:#eaf2ff}
@@ -92,3 +95,22 @@ button:disabled{cursor:default;opacity:.45}
 .info-box p{margin:0}
 .info-box p+p{margin-top:4px}
 @media(max-width:350px){.history-toolbar{padding-inline:14px;gap:5px}.history-toolbar .link-button{font-size:11px}.history-toolbar #historyCount{font-size:11px}.info-box{font-size:11px}}
+
+/* Fixed-size SVG icons stay centered across browsers and phone platforms. */
+.shutter{display:grid;place-items:center;padding:0;line-height:0}
+.shutter svg,.gallery-button svg{display:block;width:28px;height:28px;flex:none;pointer-events:none}
+.gallery-button{position:relative;justify-content:center;min-height:52px;width:76px;gap:4px}
+.gallery-button small{line-height:1.2;white-space:nowrap;font-size:10px}
+.gallery-button input{display:block;position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
+.gallery-button:focus-within,.shutter:focus-visible{outline:2px solid #84adff;outline-offset:3px}
+.card-icon svg{display:block;width:28px;height:28px;margin:auto}
+#homeScreen .home-card{min-height:96px}
+#homeScreen .primary-card{margin-top:24px}
+#homeScreen .home-card b{font-size:16px;word-break:keep-all}
+#homeScreen .home-card small{font-size:12px;line-height:1.45;word-break:keep-all}
+.home-help{display:flex;align-items:center;justify-content:space-between;min-height:44px;margin-top:4px;color:var(--blue);font-size:14px;text-decoration:none}
+.home-help:focus-visible{outline:2px solid var(--blue);outline-offset:3px;border-radius:4px}
+@media(max-height:540px){
+  #scannerScreen.scanner-screen{overflow-y:auto}
+  #scannerScreen .camera{flex:none;height:42dvh;min-height:120px}
+}

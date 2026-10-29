@@ -1,5 +1,5 @@
-const CACHE_NAME = "batchbarcode-shell-v16";
-const SHELL = ["./", "./index.html", "./styles.css?v=16", "./app.js?v=16", "./web-parity.js?v=16", "./document-files.js?v=16", "./manifest.webmanifest", "./icon.svg", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
+const CACHE_NAME = "batchbarcode-shell-v17";
+const SHELL = ["./", "./index.html", "./styles.css?v=17", "./app.js?v=17", "./web-parity.js?v=17", "./document-files.js?v=17", "./photo-decoder.js?v=17", "./photo-worker.js?v=17", "./photo-engine.js?v=17", "./vendor/zxing-wasm/reader.js", "./vendor/zxing-wasm/share.js", "./vendor/zxing-wasm/zxing_reader.wasm", "./help.html", "./help.css?v=web17", "./help.js?v=web17", "./manifest.webmanifest", "./icon.svg", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));

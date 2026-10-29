@@ -155,9 +155,41 @@ export function downloadDocumentFile(file) {
   const url = URL.createObjectURL(file), link = document.createElement("a"); link.href = url; link.download = file.name; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
   return "downloaded";
 }
-export async function shareDocumentFiles(files) {
+
+/** File sharing support is separate from text/link sharing support. */
+export function canShareDocumentFiles(files) {
+  if (!files?.length || typeof navigator === "undefined" || typeof navigator.share !== "function" || typeof navigator.canShare !== "function") return false;
+  try { return navigator.canShare({ files }); } catch { return false; }
+}
+
+export function documentFileErrorMessage(error, action = "share") {
+  const name = String(error?.name || ""), message = String(error?.message || "");
+  if (name === "AbortError") return "작업을 취소했습니다.";
+  if (name === "NotAllowedError" || name === "SecurityError" || /permission|not allowed|denied|user activation/i.test(message)) {
+    return action === "share" ? "브라우저가 파일 공유를 허용하지 않았습니다. 파일은 준비되어 있으니 ‘파일 저장’을 눌러 내려받은 뒤 공유해 주세요." : "브라우저가 새 창을 열지 못했습니다. ‘파일 저장’을 눌러 내려받은 뒤 Excel에서 열어 주세요.";
+  }
+  if (name === "InvalidStateError") return "다른 공유 창이 열려 있습니다. 그 창을 닫은 뒤 ‘파일 공유’를 다시 눌러 주세요.";
+  if (name === "NotSupportedError" || name === "TypeError" || name === "DataError") return "이 브라우저에서는 이 파일을 바로 공유할 수 없습니다. ‘파일 저장’으로 내려받은 뒤 공유해 주세요.";
+  return action === "share" ? "공유 창을 열지 못했습니다. ‘파일 공유’를 다시 누르거나 ‘파일 저장’으로 내려받아 주세요." : "문서 파일을 열지 못했습니다. ‘파일 저장’으로 내려받은 뒤 Excel에서 열어 주세요.";
+}
+
+export async function shareDocumentFiles(files, options = {}) {
   if (!files?.length) throw new Error("공유할 파일을 선택하세요.");
-  if (navigator.share && navigator.canShare?.({ files })) { await navigator.share({ files, title: "BatchBarcode Snap" }); return "shared"; }
+  if (canShareDocumentFiles(files)) {
+    try {
+      // Call directly from a fresh click handler, before any asynchronous work.
+      // Building image-filled XLSX files first can consume the browser's activation.
+      await navigator.share({ files, title: "BatchBarcode Snap" });
+      return "shared";
+    } catch (error) {
+      if (error?.name === "AbortError") return "cancelled";
+      const friendly = new Error(documentFileErrorMessage(error));
+      friendly.name = "DocumentFileShareError";
+      friendly.cause = error;
+      throw friendly;
+    }
+  }
+  if (options.fallbackToDownload === false) return "unsupported";
   files.forEach(downloadDocumentFile); return "downloaded";
 }
 export function openDocumentFile(file) {

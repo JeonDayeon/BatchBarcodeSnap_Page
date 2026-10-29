@@ -1,4 +1,4 @@
-import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile } from './document-files.js?v=16';
+import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage } from './document-files.js?v=17';
 
 // Browser implementations of the Android document and photo actions.
 export function installWebParity(api) {
@@ -47,17 +47,62 @@ export function installWebParity(api) {
     finally { working = false; $('operationStatus').classList.add('hidden'); document.body.classList.remove('operation-busy'); }
   }
   const fileOptions = doc => ({format:doc.format || ws().settings.format || 'xlsx', ascii:!!ws().settings.ascii, order:orderHits});
+  function preparedFileDialog(files, { title = '문서 파일 공유', open = false } = {}) {
+    const el = document.createElement('dialog'); el.className = 'app-dialog';
+    el.innerHTML = `<h2>${esc(title)}</h2><div class="dialog-body"><p>파일이 준비되었습니다. 아래 버튼을 눌러 공유하거나 기기에 저장하세요.</p><ul>${files.map((file, index) => `<li>${esc(file.name)}${files.length > 1 ? ` <button type="button" class="secondary-button" data-save-file="${index}">파일 저장</button>` : ''}</li>`).join('')}</ul><p role="status" aria-live="polite"></p></div><div class="dialog-actions"></div>`;
+    document.body.append(el);
+    const status = el.querySelector('[role="status"]'), actions = el.querySelector('.dialog-actions');
+    let sharing = false;
+    const addButton = (label, handler) => {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary-button'; button.textContent = label; button.onclick = handler; actions.append(button); return button;
+    };
+    const close = () => { if (!sharing) { el.close(); el.remove(); } };
+    const saveFile = file => {
+      try { downloadDocumentFile(file); status.textContent = `${file.name} 파일의 다운로드를 요청했습니다. 브라우저의 다운로드 목록 또는 휴대폰 ‘파일’ 앱에서 확인하세요.`; }
+      catch { status.textContent = '파일을 내려받지 못했습니다. 브라우저의 다운로드 허용 설정을 확인한 뒤 ‘파일 저장’을 다시 눌러 주세요.'; }
+    };
+    for (const button of el.querySelectorAll('[data-save-file]')) button.onclick = () => saveFile(files[Number(button.dataset.saveFile)]);
+    addButton('닫기', close);
+    if (files.length === 1) addButton('파일 저장', () => saveFile(files[0]));
+    if (open && files.length === 1) addButton('파일 열기', () => {
+      try {
+        const result = openDocumentFile(files[0]);
+        status.textContent = result === 'opened' ? '문서 파일을 새 창에서 열었습니다.' : '새 창 대신 다운로드를 요청했습니다. 내려받은 파일을 Excel에서 열어 주세요.';
+      } catch (error) { status.textContent = documentFileErrorMessage(error, 'open'); }
+    });
+    const shareButton = addButton('파일 공유', () => {
+      if (sharing) return;
+      // This handler itself opens the native share sheet. Do not await a dialog
+      // promise, create XLSX data, or inspect userActivation before calling it.
+      const request = shareDocumentFiles(files, { fallbackToDownload: false });
+      sharing = true;
+      for (const button of el.querySelectorAll('button')) button.disabled = true;
+      status.textContent = '공유 창을 여는 중…';
+      Promise.resolve(request).then(result => {
+        if (result === 'shared') status.textContent = '파일 공유를 완료했습니다.';
+        else if (result === 'cancelled') status.textContent = '공유를 취소했습니다. 파일은 준비되어 있으니 다시 공유하거나 저장할 수 있어요.';
+        else status.textContent = '이 브라우저는 파일 공유를 지원하지 않습니다. ‘파일 저장’으로 내려받은 뒤 공유해 주세요.';
+      }).catch(error => {
+        status.textContent = error?.name === 'DocumentFileShareError' ? error.message : documentFileErrorMessage(error);
+      }).finally(() => {
+        sharing = false;
+        for (const button of el.querySelectorAll('button')) button.disabled = false;
+        shareButton.disabled = !canShareDocumentFiles(files);
+      });
+    });
+    shareButton.disabled = !canShareDocumentFiles(files);
+    if (shareButton.disabled) status.textContent = '이 브라우저는 파일 공유를 지원하지 않습니다. ‘파일 저장’으로 내려받은 뒤 공유해 주세요.';
+    el.addEventListener('cancel', event => { event.preventDefault(); close(); });
+    el.showModal();
+  }
   async function fileAction(doc, action) {
     if (!doc) return;
     const file = await run('문서 파일을 만드는 중…', () => buildDocumentFile(doc, fileOptions(doc)));
     if (!file) return;
     if (action === 'share') {
-      const choice = await dialog('문서 파일 공유', `<p>${esc(file.name)} 파일이 준비되었습니다.</p>`, [{label:'취소',value:'cancel'},{label:'파일 공유',value:'share'}]);
-      if(choice?.action!=='share')return;
-      const status = await shareDocumentFiles([file]);
-      if (status !== 'shared') toast('이 브라우저는 파일 공유를 지원하지 않아 파일을 다운로드했습니다.');
+      preparedFileDialog([file]);
     } else if (action === 'open') {
-      await openDocumentFile(file); toast('문서 파일을 열거나 다운로드합니다. 다운로드한 파일을 Excel에서 열 수 있어요.');
+      preparedFileDialog([file], {title:'문서 파일 열기',open:true});
     } else { downloadDocumentFile(file); toast('문서 파일을 다운로드했습니다.'); }
   }
   intercept('exportDocument', () => fileAction(getActiveDocument(), 'save'));
@@ -75,9 +120,7 @@ export function installWebParity(api) {
     const docs = selectedDocuments(); if (!docs.length) return toast('문서를 선택해 주세요.');
     const files = await run('공유 파일을 만드는 중…', () => Promise.all(docs.map(d => buildDocumentFile(d,fileOptions(d)))));
     if(!files)return;
-    const choice = await dialog('선택 문서 공유', `<p>선택한 문서 ${docs.length}개의 파일이 준비되었습니다.</p><ul>${files.map(file=>`<li>${esc(file.name)}</li>`).join('')}</ul>`, [{label:'취소',value:'cancel'},{label:'파일 공유',value:'share'}]);
-    if(choice?.action !== 'share') return;
-    if(files && (await shareDocumentFiles(files)) !== 'shared') toast('파일 공유를 지원하지 않아 선택한 파일을 다운로드했습니다.');
+    preparedFileDialog(files, {title:'선택 문서 공유'});
   });
   intercept('deleteSelected', async () => {
     const docs = selectedDocuments(); if (!docs.length) return toast('문서를 선택해 주세요.');
