@@ -1,4 +1,5 @@
 // Document files are built locally. Photos and barcode values never leave the browser.
+import {photoDisplayNumbers} from './photo-review.js?v=21';
 const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const encoder = new TextEncoder();
 
@@ -49,13 +50,13 @@ function decoded(hit) { return hit.recognized !== false && !hit.hasConflict && S
 function documentTables(doc, options) {
   const unique = [], photos = [], barcodes = [], anchors = [], seen = new Set();
   for (const [photoIndex, photo] of (doc.photos || []).entries()) {
-    const hits = orderedHits(photo, options.order);
+    const hits = orderedHits(photo, options.order),numbers=photoDisplayNumbers(hits);
     anchors.push({ photo, hits, row: photos.length + 1 });
     for (const [index, hit] of (hits.length ? hits : [null]).entries()) {
-      const row = [String(doc.id || "").slice(0, 12), timestamp(photo.capturedAt || doc.createdAt), `${photoIndex + 1} / ${doc.photos.length}`, hit ? index + 1 : "", hit?.format || "", hit ? decoded(hit) ? displayValue(hit.value, options.ascii) : "읽지 못함" : "감지된 코드 없음", index === 0 ? "원본 사진" : "", index === 0 ? "인식 결과 사진" : "", photo.name || `사진 ${photoIndex + 1}`, hit?.left ?? "", hit?.top ?? "", hit?.right ?? "", hit?.bottom ?? "", hit ? JSON.stringify(String(hit.value ?? "")) : ""];
+      const row = [String(doc.id || "").slice(0, 12), timestamp(photo.capturedAt || doc.createdAt), `${photoIndex + 1} / ${doc.photos.length}`, numbers[index]??"", hit?.format || "", hit ? decoded(hit) ? displayValue(hit.value, options.ascii) : "읽지 못함" : "감지된 코드 없음", index === 0 ? "원본 사진" : "", index === 0 ? "인식 결과 사진" : "", photo.name || `사진 ${photoIndex + 1}`, hit?.left ?? "", hit?.top ?? "", hit?.right ?? "", hit?.bottom ?? "", hit ? JSON.stringify(String(hit.value ?? "")) : ""];
       photos.push(row);
       if (!hit || !decoded(hit)) continue;
-      const entry = [doc.name || "작업", timestamp(photo.capturedAt || doc.createdAt), photoIndex + 1, index + 1, hit.format || "", displayValue(hit.value, options.ascii), JSON.stringify(String(hit.value ?? "")), hit.left ?? "", hit.top ?? "", hit.right ?? "", hit.bottom ?? ""];
+      const entry = [doc.name || "작업", timestamp(photo.capturedAt || doc.createdAt), photoIndex + 1, numbers[index]??"", hit.format || "", displayValue(hit.value, options.ascii), JSON.stringify(String(hit.value ?? "")), hit.left ?? "", hit.top ?? "", hit.right ?? "", hit.bottom ?? ""];
       barcodes.push(entry);
       const key = `${hit.format}\u0000${hit.value}`;
       if (!seen.has(key)) { seen.add(key); unique.push(entry); }
@@ -114,11 +115,13 @@ async function photoImages(photo, hits) {
     const toBytes = async () => { const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .76)); if (!blob) throw new Error("사진 파일 생성 실패"); return new Uint8Array(await blob.arrayBuffer()); };
     const original = await toBytes(), sx = canvas.width / (photo.scanWidth || photo.width || width), sy = canvas.height / (photo.scanHeight || photo.height || height);
     ctx.lineWidth = 3; ctx.font = "bold 16px sans-serif";
+    const numbers=photoDisplayNumbers(hits);
     hits.forEach((hit, index) => {
+      if(numbers[index]===null)return;
       if (![hit.left, hit.top, hit.right, hit.bottom].every(Number.isFinite)) return;
       const left = Math.max(0, hit.left * sx), top = Math.max(0, hit.top * sy), w = Math.max(12, (hit.right - hit.left) * sx), h = Math.max(12, (hit.bottom - hit.top) * sy);
       ctx.strokeStyle = ctx.fillStyle = decoded(hit) ? "#16a34a" : "#d97706"; ctx.strokeRect(left, top, w, h);
-      const label = `${index + 1} ${decoded(hit) ? "✓" : "?"}`, bw = ctx.measureText(label).width + 12, by = Math.max(0, top - 24), bx = Math.min(left, Math.max(0, canvas.width - bw));
+      const label = `${numbers[index]} ${decoded(hit) ? "✓" : "?"}`, bw = ctx.measureText(label).width + 12, by = Math.max(0, top - 24), bx = Math.min(left, Math.max(0, canvas.width - bw));
       ctx.fillRect(bx, by, bw, 24); ctx.fillStyle = "white"; ctx.fillText(label, bx + 6, by + 18);
     });
     return { original, result: await toBytes(), width: canvas.width, height: canvas.height };

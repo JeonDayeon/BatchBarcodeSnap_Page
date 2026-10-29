@@ -1,5 +1,5 @@
-import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=19';
-import {photoMarker,rotatePhotoHit} from './photo-review.js?v=19';
+import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=21';
+import {photoMarker,rotatePhotoHit,photoDisplayNumbers} from './photo-review.js?v=21';
 
 // Browser implementations of the Android document and photo actions.
 export function installWebParity(api) {
@@ -7,7 +7,7 @@ export function installWebParity(api) {
     escapeHtml: esc, renderDetail, renderPhotoResult, renderHistory, showScreen,
     toast, stopCamera, openDraft, scanPhoto, getActiveDocument, getResult } = api;
   let selectedPhotos = new Set(), selectedPhotoDocument = null, suppressPhotoClick = false;
-  let dateStart = '', dateEnd = '', alphabetical = false, working = false, saveReturnToResult=false, pendingImportDoc=null;
+  let dateStart = '', dateEnd = '', alphabetical = false, working = false, saveReturnToResult=false, pendingImportDoc=null, pendingCameraDoc=null,shareSequence=0;
   const ws = getWorkspace;
   document.addEventListener('click',e=>{if(working && e.target.closest('.screen')){e.preventDefault();e.stopImmediatePropagation();toast('현재 처리가 끝날 때까지 잠시 기다려 주세요.');}},true);
   const currentScreen = () => document.querySelector('.screen.active')?.id;
@@ -30,7 +30,7 @@ export function installWebParity(api) {
       const finish = value => { el.close(); el.remove(); resolve(value); };
       for (const action of actions) {
         const b = document.createElement('button'); b.type = 'button'; b.className = action.danger ? 'danger-button' : 'secondary-button'; b.textContent = action.label;
-        b.onclick = () => { if (action.validate && !action.validate(el)) return; finish({ action: action.value, element: el }); };
+        b.onclick = () => { if (action.validate && !action.validate(el)) return; finish({ action: action.value, element: el });try{action.onChoose?.();}catch(error){toast(error.message||'사진 선택을 열지 못했습니다.');} };
         el.querySelector('.dialog-actions').append(b);
       }
       el.addEventListener('cancel', e => { e.preventDefault(); finish(null); });
@@ -98,20 +98,54 @@ export function installWebParity(api) {
   }
   async function fileAction(doc, action) {
     if (!doc) return;
+    if(action==='share')return showDocumentShareScreen([doc],'detailScreen');
     assertDocumentReady(doc);
-    const file = await run('문서 파일을 만드는 중…', () => buildDocumentFile(doc, fileOptions(doc)));
-    if (!file) return;
-    if (action === 'share') {
-      preparedFileDialog([file]);
-    } else if (action === 'open') {
-      preparedFileDialog([file], {title:'문서 파일 열기',open:true});
-    } else { downloadDocumentFile(file); toast('문서 파일을 다운로드했습니다.'); }
+    let preview=null;
+    // Reserve the viewer while Safari still has this button's user activation.
+    if(action==='open')try{preview=window.open('about:blank','_blank');if(preview)preview.opener=null;}catch{}
+    try{
+      const file=await run('문서 파일을 만드는 중…',()=>buildDocumentFile(doc,fileOptions(doc)));
+      if(!file){preview?.close();return;}
+      if(action==='open'&&preview){const url=URL.createObjectURL(file);try{preview.location.replace(url);}catch{preview.close();downloadDocumentFile(file);}setTimeout(()=>URL.revokeObjectURL(url),120000);}
+      else{downloadDocumentFile(file);toast(action==='open'?'파일을 다운로드했습니다. 휴대폰 파일 앱에서 열어 주세요.':'문서 파일을 다운로드했습니다.');}
+    }catch(error){preview?.close();throw error;}
   }
   intercept('exportDocument', () => fileAction(getActiveDocument(), 'save'));
   intercept('detailOpen', () => fileAction(getActiveDocument(), 'open'));
   intercept('detailShare', () => fileAction(getActiveDocument(), 'share'));
   function selectedDocuments() {
     return [...document.querySelectorAll('#historyItems [data-select]:checked')].map(el => ws().documents.find(d => d.id === el.dataset.select)).filter(Boolean);
+  }
+  async function showDocumentShareScreen(docs,returnScreen){
+    const shareRequest=++shareSequence;
+    assertDocumentReady(docs);
+    const files=await run('공유 파일을 만드는 중…',async()=>{const ready=[];for(const doc of docs)ready.push(await buildDocumentFile(doc,fileOptions(doc)));return ready;});
+    if(!files||shareRequest!==shareSequence)return;
+    let sharing=false,downloadMode=false,downloadFile=files.length===1?files[0]:null;
+    const button=$('sharePreparedFiles'),status=$('shareFileStatus'),back=$('documentShareBack');
+    $('shareDocumentCount').textContent=`선택한 문서 ${docs.length}개`;
+    $('shareDocumentFiles').innerHTML=files.map((file,index)=>`<div class="share-file-row"><span class="share-file-icon" aria-hidden="true">▤</span><div><b>${esc(file.name)}</b><small>${docs[index].format==='csv'?'CSV':'XLSX (Excel)'} · ${esc(new Date(docs[index].createdAt||docs[index].savedAt).toLocaleDateString('ko-KR'))}</small></div><span class="share-file-check" aria-hidden="true">✓</span></div>`).join('');
+    async function prepareDownload(message){
+      downloadMode=true;button.disabled=true;status.textContent=message;
+      try{if(!downloadFile)downloadFile=await buildDocumentFile(docs,{...fileOptions(docs[0]),name:'선택한_문서'});if(shareRequest!==shareSequence)return;button.textContent='파일 저장';button.disabled=false;}
+      catch(error){if(shareRequest===shareSequence)status.textContent=`파일 준비 실패: ${error.message}`;}
+    }
+    button.disabled=false;button.textContent=`${files.length}개 파일 공유`;
+    status.textContent='공유 버튼을 누르면 휴대폰의 시스템 공유창이 열립니다.';
+    back.onclick=()=>{if(sharing)return;++shareSequence;button.onclick=null;back.onclick=null;$('shareDocumentFiles').replaceChildren();if(returnScreen==='detailScreen')renderDetail(docs[0].id);else{renderHistory();showScreen('historyScreen');}};
+    button.onclick=()=>{
+      if(sharing)return;
+      if(downloadMode){try{downloadDocumentFile(downloadFile);status.textContent='파일 다운로드를 요청했습니다. 휴대폰 파일 앱에서 열어 공유할 수 있습니다.';}catch(error){status.textContent=error.message;}return;}
+      // Invoke sharing directly on this fresh click, after the files are ready.
+      const request=shareDocumentFiles(files,{fallbackToDownload:false});sharing=true;button.disabled=true;status.textContent='시스템 공유창을 여는 중…';
+      Promise.resolve(request).then(result=>{
+        if(result==='shared')status.textContent='파일 공유를 완료했습니다.';
+        else if(result==='cancelled')status.textContent='공유를 취소했습니다. 다시 공유할 수 있습니다.';
+        else return prepareDownload('이 파일의 직접 공유를 지원하지 않습니다. 파일 저장 후 휴대폰 파일 앱에서 공유해 주세요.');
+      }).catch(()=>prepareDownload('이 파일의 공유 요청이 차단됐습니다. 파일 저장 후 휴대폰 파일 앱에서 공유해 주세요.')).finally(()=>{sharing=false;button.disabled=downloadMode&&!downloadFile;});
+    };
+    showScreen('documentShareScreen');
+    if(!canShareDocumentFiles(files))await prepareDownload('이 파일의 직접 공유를 지원하지 않습니다. 파일 저장 후 휴대폰 파일 앱에서 공유해 주세요.');
   }
   intercept('exportSelected', async () => {
     const docs = selectedDocuments(); if (!docs.length) return toast('문서를 선택해 주세요.');
@@ -121,10 +155,7 @@ export function installWebParity(api) {
   });
   intercept('shareSelected', async () => {
     const docs = selectedDocuments(); if (!docs.length) return toast('문서를 선택해 주세요.');
-    assertDocumentReady(docs);
-    const files = await run('공유 파일을 만드는 중…', () => Promise.all(docs.map(d => buildDocumentFile(d,fileOptions(d)))));
-    if(!files)return;
-    preparedFileDialog(files, {title:'선택 문서 공유'});
+    await showDocumentShareScreen(docs,'historyScreen');
   });
   intercept('deleteSelected', async () => {
     const docs = selectedDocuments(); if (!docs.length) return toast('문서를 선택해 주세요.');
@@ -174,7 +205,12 @@ export function installWebParity(api) {
     const selected=rows.filter(x=>x.querySelector('[data-select]')?.checked).length;
     const all=visible.length>0 && visible.every(x=>x.row.querySelector('[data-select]')?.checked);
     $('selectAll').checked=all; $('selectAll').indeterminate=selected>0&&!all;
-    $('selectedCount').textContent=`${selected}개 선택`;
+    const selecting=!$('historySelection').classList.contains('hidden'),selectedDocs=selectedDocuments(),pending=selectedDocs.some(d=>d.photos.some(p=>p.scanState==='scanning')),retry=selectedDocs.some(d=>d.photos.some(p=>p.scanError||p.scanState&&p.scanState!=='done'&&p.scanState!=='scanning'));
+    $('historyTitle').textContent=selecting?`${selected}개 선택됨`:'저장된 목록';$('openTrash').textContent=selecting?'종료':'휴지통';
+    $('historyToolbar').classList.toggle('hidden',selecting);$('historySelectionActions').classList.toggle('hidden',!selecting);$('historySelectionHint').classList.toggle('hidden',!selecting);
+    $('selectedCount').textContent=`${visible.filter(x=>x.row.querySelector('[data-select]')?.checked).length} / ${visible.length}개`;$('selectAllLabel').textContent=`전체 선택 (${visible.length}건)`;
+    $('exportSelected').textContent=pending?'↓ 인식 중':retry?'↓ 재인식 필요':selected?`↓ 저장 (${selected})`:'↓ 저장';$('shareSelected').textContent=pending?'공유 (인식 중)':retry?'공유 (재인식 필요)':selected?`공유 (${selected})`:'공유';
+    $('historySelectionHint').textContent=pending||retry?'인식 중이거나 재인식이 필요한 작업은 완료 후 저장하거나 공유할 수 있습니다.':'선택한 문서를 한 번에 저장하거나 공유할 수 있습니다.';
     for(const id of ['exportSelected','shareSelected','deleteSelected']) $(id).disabled=selected===0;
     $('historySort').textContent=alphabetical?'가나다순 ▾':'최근 저장순 ▾';
   }
@@ -203,6 +239,8 @@ export function installWebParity(api) {
   intercept('historyBack', ()=>{
     if(!$('historySelection').classList.contains('hidden')) $('toggleSelect').click();else showScreen('homeScreen');
   });
+  intercept('openTrash',()=>{if(!$('historySelection').classList.contains('hidden'))$('toggleSelect').click();else{api.renderTrash();showScreen('trashScreen');}});
+  $('historyItems').addEventListener('click',e=>{const row=e.target.closest('[data-open]');if(row&&!$('historySelection').classList.contains('hidden')){e.preventDefault();e.stopImmediatePropagation();row.closest('.history-card').querySelector('[data-select]').click();}},true);
 
   function decorateDetail() {
     const d=getActiveDocument(); if(!d) return;
@@ -246,13 +284,16 @@ export function installWebParity(api) {
   intercept('detailBack',()=>{if(selectedPhotos.size){selectedPhotos.clear();decorateDetail();}else{renderHistory();showScreen('historyScreen');}});
   intercept('addMorePhotos',async()=>{
     const d=getActiveDocument();if(!d)return;
-    const c=await dialog('사진 추가','',[{label:'갤러리에서 선택',value:'gallery'},{label:'카메라로 촬영',value:'camera'},{label:'취소',value:'cancel'}]);
+    const c=await dialog('사진 추가','',[{label:'갤러리에서 선택',value:'gallery'},{label:'카메라로 촬영',value:'camera',onChoose:()=>{pendingCameraDoc=d;stopCamera();const input=$('systemCameraInput');input.value='';input.click();}},{label:'취소',value:'cancel'}]);
     if(c?.action==='gallery'){pendingImportDoc=d;$('detailPhotoInput').click();}
-    if(c?.action==='camera')api.openDocumentCamera(d);
   });
   $('detailPhotoInput').addEventListener('change',async e=>{
     const files=[...e.target.files],target=pendingImportDoc;pendingImportDoc=null;e.target.value='';
     if(files.length&&target&&ws().documents.some(d=>d.id===target.id))try{await api.importIntoDocument(files,target);}catch(error){toast(error.message);}
+  });
+  $('systemCameraInput').addEventListener('change',async e=>{
+    const files=[...(e.target.files||[])],target=pendingCameraDoc;pendingCameraDoc=null;e.target.value='';
+    if(files.length&&target&&ws().documents.includes(target))try{await api.importIntoDocument(files,target);}catch(error){toast(error.message);}
   });
 
   intercept('retryPhoto',async()=>{
@@ -286,9 +327,9 @@ export function installWebParity(api) {
   let zoomCleanup=()=>{};
   async function openZoom(withOverlay,focusIndex) {
     const {photo}=resultPhoto();if(!photo)return;
-    const image=await loadImage(photo.blob),hits=orderHits(photo.hits||[]);
+    const image=await loadImage(photo.blob),hits=orderHits(photo.hits||[]),numbers=photoDisplayNumbers(hits);
     const dialogEl=document.createElement('dialog');dialogEl.className='zoom-dialog';
-    dialogEl.innerHTML=`<header><button type="button" data-close aria-label="사진 확대 닫기">‹ 닫기</button><strong>${withOverlay?'인식 결과':'원본 사진'}</strong><button type="button" data-reset>초기화</button></header><div class="zoom-tools"><button data-zoom="out" aria-label="축소">−</button><span>두 손가락 확대 · 끌어서 이동</span><button data-zoom="in" aria-label="확대">＋</button></div><div class="zoom-viewport"><canvas></canvas></div><p>사진을 두 번 누르면 초기화됩니다.</p>`;
+    dialogEl.innerHTML=`<header><button type="button" data-close aria-label="사진 확대 닫기">‹</button><strong>${withOverlay?'인식 결과':'원본 사진'}</strong></header><div class="zoom-viewport"><canvas></canvas></div><p>두 손가락으로 확대 · 드래그 이동 · 두 번 탭하면 초기화</p>`;
     document.body.append(dialogEl);dialogEl.showModal();
     const viewport=dialogEl.querySelector('.zoom-viewport'),canvas=dialogEl.querySelector('canvas'),context=canvas.getContext('2d');
     // The stored photo stays full resolution; the viewer limits its display surface.
@@ -301,13 +342,14 @@ export function installWebParity(api) {
       annotations.width=Math.max(1,Math.round(w*dpr));annotations.height=Math.max(1,Math.round(h*dpr));
       const c=annotations.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,w,h);if(!withOverlay||!w||!h)return;
       const factor=fit()*scale,sx=canvas.width/sourceWidth*factor,sy=canvas.height/sourceHeight*factor,ox=w/2-canvas.width*factor/2+x,oy=h/2-canvas.height*factor/2+y;
-      const badgeScale=Math.min(1,.65*scale),badgeHeight=20*badgeScale,pad=5*badgeScale;
+      const badgeScale=Math.min(1,.8*scale),badgeHeight=20*badgeScale,pad=5*badgeScale;
       c.lineWidth=1.5;c.font=`bold ${12*badgeScale}px system-ui`;
       hits.forEach((hit,i)=>{
+        if(numbers[i]===null)return;
         if(![hit.left,hit.top,hit.right,hit.bottom].every(Number.isFinite)||[hit.left,hit.top,hit.right,hit.bottom].every(v=>v===0))return;
         const left=ox+Math.min(hit.left,hit.right)*sx,top=oy+Math.min(hit.top,hit.bottom)*sy;
         const actualW=Math.abs(hit.right-hit.left)*sx,actualH=Math.abs(hit.bottom-hit.top)*sy,bw=Math.max(8,actualW),bh=Math.max(8,actualH);
-        const bx=left-(bw-actualW)/2,by=top-(bh-actualH)/2,marker=photoMarker(hit,i,i===focusIndex);
+        const bx=left-(bw-actualW)/2,by=top-(bh-actualH)/2,marker=photoMarker(hit,numbers[i]-1,i===focusIndex);
         if(bx+bw<0||by+bh<0||bx>w||by>h)return;
         c.strokeStyle=marker.color;c.strokeRect(bx,by,bw,bh);
         const textWidth=c.measureText(marker.label).width+pad*2,tx=Math.max(0,Math.min(w-textWidth,bx)),ty=Math.max(0,Math.min(h-badgeHeight,by-badgeHeight-1));
@@ -319,8 +361,7 @@ export function installWebParity(api) {
     const paint=()=>{canvas.style.width=canvas.width*fit()+'px';canvas.style.height=canvas.height*fit()+'px';canvas.style.transform=`translate(calc(-50% + ${x}px),calc(-50% + ${y}px)) scale(${scale})`;paintMarkers();};
     const reset=()=>{scale=1;x=0;y=0;paint();};
     const close=()=>{zoomCleanup();dialogEl.close();dialogEl.remove();};
-    dialogEl.querySelector('[data-close]').onclick=close;dialogEl.querySelector('[data-reset]').onclick=reset;dialogEl.addEventListener('cancel',e=>{e.preventDefault();close();});
-    dialogEl.querySelector('[data-zoom="in"]').onclick=()=>{scale=Math.min(12,scale*1.5);paint();};dialogEl.querySelector('[data-zoom="out"]').onclick=()=>{scale=Math.max(1,scale/1.5);paint();};
+    dialogEl.querySelector('[data-close]').onclick=close;dialogEl.addEventListener('cancel',e=>{e.preventDefault();close();});
     viewport.addEventListener('wheel',e=>{e.preventDefault();scale=Math.max(1,Math.min(12,scale*(e.deltaY<0?1.15:1/1.15)));paint();},{passive:false});
     const startGesture=()=>{const p=[...pointers.values()];gesture={x,y,scale,point:p[0],distance:p.length>1?Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y):0};};
     viewport.onpointerdown=e=>{viewport.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});startGesture();};
@@ -337,6 +378,7 @@ export function installWebParity(api) {
   for(const id of ['photoOriginalImage','photoResultImageWrap']){$(id).tabIndex=0;$(id).setAttribute('role','button');$(id).setAttribute('aria-label',id==='photoOriginalImage'?'원본 사진 크게 보기':'인식 결과 크게 보기');$(id).addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$(id).click();}});}
 
   const refresh=()=>{
+    if(currentScreen()==='settingsScreen')for(const input of document.querySelectorAll('.setting-row input[type="checkbox"]'))input.closest('.setting-row').dataset.state=input.disabled?'미지원':input.checked?'ON':'OFF';
     if(currentScreen()==='historyScreen')decorateHistory();
     if(currentScreen()==='detailScreen')decorateDetail();
     if(currentScreen()==='trashScreen'){$('purgeExpiredTrash').classList.toggle('hidden',!expiredTrash().length);$('purgeExpiredTrash').textContent=`보관 기간 지난 문서 ${expiredTrash().length}개 정리`;}
@@ -359,7 +401,9 @@ export function installWebParity(api) {
   for(const [id,key] of [['autoCaptureSetting','autoCapture'],['torchSetting','torch']]){
     $(id).checked=!!ws().settings[key];$(id).addEventListener('change',async e=>{ws().settings[key]=e.target.checked;await saveWorkspace();});
   }
+  for(const input of document.querySelectorAll('.setting-row input[type="checkbox"]'))input.addEventListener('change',()=>{input.closest('.setting-row').dataset.state=input.disabled?'미지원':input.checked?'ON':'OFF';});
   alphabetical=ws().settings.historySort==='name';
+  $('webVersionLabel').textContent=`웹 버전 ${document.querySelector('meta[name="batchbarcode-release"]')?.content||''}`;
   refresh();
 }
 
