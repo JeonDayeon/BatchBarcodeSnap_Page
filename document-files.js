@@ -2,6 +2,32 @@
 const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const encoder = new TextEncoder();
 
+/** Checks photo processing state without changing documents or their original photos. */
+export function assertDocumentReady(docOrDocs) {
+  const docs = Array.isArray(docOrDocs) ? docOrDocs : [docOrDocs];
+  if (!docs.length || docs.some(doc => !doc || !Array.isArray(doc.photos))) throw new Error("내보낼 문서를 찾지 못했습니다.");
+  const incomplete = docs.map(doc => ({
+    doc,
+    photos: doc.photos.flatMap((photo, index) => {
+      if (!photo) return [index + 1];
+      const state = String(photo.scanState ?? "").trim().toLowerCase();
+      const hasError = typeof photo.scanError === "string" ? photo.scanError.trim().length > 0 : Boolean(photo.scanError);
+      // Older saved records have no scanState. Preserve those when no error is recorded.
+      return hasError || (state !== "" && state !== "done") ? [index + 1] : [];
+    })
+  })).filter(item => item.photos.length);
+  if (incomplete.length) {
+    const first = incomplete[0], name = String(first.doc.name || "선택한 문서").trim() || "선택한 문서";
+    const photos = first.photos.slice(0, 3).join(", ") + (first.photos.length > 3 ? " 외" : "");
+    const others = incomplete.length > 1 ? ` 같은 상태의 문서가 ${incomplete.length - 1}개 더 있어요.` : "";
+    const error = new Error(`‘${name}’의 사진 ${photos}번은 인식이 끝나지 않았거나 다시 인식이 필요해요.${others} 인식 완료를 기다리거나 사진 결과의 ‘다시 인식’으로 오류를 해결한 뒤 저장하거나 공유해 주세요.`);
+    error.name = "DocumentNotReadyError";
+    error.code = "DOCUMENT_NOT_READY";
+    throw error;
+  }
+  return docs;
+}
+
 function safeFilename(name) {
   return String(name || "바코드_문서").replace(/\.(xlsx|csv)$/i, "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim().slice(0, 160) || "바코드_문서";
 }
@@ -111,8 +137,7 @@ function relationships(entries) { return `<?xml version="1.0" encoding="UTF-8"?>
 
 /** Builds a genuine file for downloads, external opening or file sharing. Does not save or mutate the document. */
 export async function buildDocumentFile(doc, options = {}) {
-  const docs = Array.isArray(doc) ? doc : [doc];
-  if (!docs.length || docs.some(item => !item || !Array.isArray(item.photos))) throw new Error("내보낼 문서를 찾지 못했습니다.");
+  const docs = assertDocumentReady(doc);
   const format = options.format || docs[0].format || "xlsx", tables = { unique: [], photos: [], barcodes: [], anchors: [] }, filename = safeFilename(options.name || (docs.length > 1 ? "선택한_문서" : docs[0].name));
   for (const item of docs) {
     const next = documentTables(item, options), offset = tables.photos.length;

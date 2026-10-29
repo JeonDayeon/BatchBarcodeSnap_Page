@@ -1,5 +1,5 @@
 import { prepareZXingModule, readBarcodes, formatToLabel } from './vendor/zxing-wasm/reader.js';
-import { detectNativePixels, combineEngineHits } from './native-decoder.js?v=18';
+import { detectNativePixels, combineEngineHits, mergeHitMetadata } from './native-decoder.js?v=19';
 
 let ready;
 export function preparePhotoEngine() {
@@ -49,13 +49,24 @@ export function mergePhotoHits(items) {
   for(const hit of items) {
     const prior=merged.find(other=>samePosition(other,hit));
     if(prior) {
-      const observations=(prior.observations||1)+1;
+      const observations=(prior.observations||1)+(hit.observations||1),metadata=mergeHitMetadata(prior,hit);
       if((hit.right-hit.left)*(hit.bottom-hit.top)>(prior.right-prior.left)*(prior.bottom-prior.top)) Object.assign(prior,hit);
+      Object.assign(prior,metadata);
       prior.observations=observations;
     }
     else merged.push({...hit,observations:1});
   }
   return merged;
+}
+
+function boundedCandidateQuad(points,width,height){
+  if(points.length!==4||points.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y)||p.x<0||p.y<0||p.x>width||p.y>height))return false;
+  if(new Set(points.map(p=>`${p.x}:${p.y}`)).size!==4)return false;
+  const crosses=points.map((a,index)=>{
+    const b=points[(index+1)%4],c=points[(index+2)%4];return (b.x-a.x)*(c.y-b.y)-(b.y-a.y)*(c.x-b.x);
+  });
+  // Reject collapsed/crossed error polygons; no box is inferred from image texture.
+  return crosses.every(value=>value>0)||crosses.every(value=>value<0);
 }
 
 // Each region is sampled directly from the original upright image. Only the broad
@@ -72,13 +83,16 @@ export async function scanPhotoSource(source, makeCanvas, onProgress=()=>{}) {
     context.drawImage(source,x,y,w,h,0,0,canvas.width,canvas.height);
     const t=performance.now();
     const pixels=context.getImageData(0,0,canvas.width,canvas.height);
-    const [found,native]=await Promise.all([readBarcodes(pixels,{...options,...extra}),detectNativePixels(pixels)]);
+    const [found,native]=await Promise.all([readBarcodes(pixels,{...options,...extra,returnErrors:true}),detectNativePixels(pixels)]);
     const primary=[];
     for(const r of found) {
-      if(!r.isValid||!r.text||!r.position) continue;
-      const corners=['topLeft','topRight','bottomRight','bottomLeft'].map(key=>r.position[key]).filter(Boolean).map(p=>({x:x+p.x*w/canvas.width,y:y+p.y*h/canvas.height}));
-      if(corners.length!==4) continue;
-      primary.push({value:r.text,format:formatToLabel(r.format),left:Math.min(...corners.map(p=>p.x)),top:Math.min(...corners.map(p=>p.y)),right:Math.max(...corners.map(p=>p.x)),bottom:Math.max(...corners.map(p=>p.y)),corners,rotation:r.rotation,lineCount:r.lineCount,pass:label});
+      if(!r.position)continue;
+      const recognized=!!(r.isValid&&typeof r.text==='string'&&r.text.length);
+      const localCorners=['topLeft','topRight','bottomRight','bottomLeft'].map(key=>r.position[key]).filter(Boolean);
+      if(localCorners.length!==4)continue;
+      if(!recognized&&(!r.error||!FORMATS.includes(r.format)||!boundedCandidateQuad(localCorners,canvas.width,canvas.height)))continue;
+      const corners=localCorners.map(p=>({x:x+p.x*w/canvas.width,y:y+p.y*h/canvas.height}));
+      primary.push({value:r.text||'',format:formatToLabel(r.format),recognized,...(!recognized?{decodeErrors:[String(r.error)]}:{}),left:Math.min(...corners.map(p=>p.x)),top:Math.min(...corners.map(p=>p.y)),right:Math.max(...corners.map(p=>p.x)),bottom:Math.max(...corners.map(p=>p.y)),corners,rotation:r.rotation,lineCount:r.lineCount,pass:label});
     }
     const mappedNative=native.map(r=>({...r,left:x+r.left*w/canvas.width,top:y+r.top*h/canvas.height,right:x+r.right*w/canvas.width,bottom:y+r.bottom*h/canvas.height,corners:r.corners.map(p=>({x:x+p.x*w/canvas.width,y:y+p.y*h/canvas.height})),pass:label}));
     raw.push(...combineEngineHits(primary,mappedNative));

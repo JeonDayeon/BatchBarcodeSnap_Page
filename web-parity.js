@@ -1,4 +1,5 @@
-import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage } from './document-files.js?v=18';
+import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=19';
+import {photoMarker,rotatePhotoHit} from './photo-review.js?v=19';
 
 // Browser implementations of the Android document and photo actions.
 export function installWebParity(api) {
@@ -97,6 +98,7 @@ export function installWebParity(api) {
   }
   async function fileAction(doc, action) {
     if (!doc) return;
+    assertDocumentReady(doc);
     const file = await run('문서 파일을 만드는 중…', () => buildDocumentFile(doc, fileOptions(doc)));
     if (!file) return;
     if (action === 'share') {
@@ -113,11 +115,13 @@ export function installWebParity(api) {
   }
   intercept('exportSelected', async () => {
     const docs = selectedDocuments(); if (!docs.length) return toast('문서를 선택해 주세요.');
+    assertDocumentReady(docs);
     const file = await run('선택 문서를 만드는 중…', () => buildDocumentFile(docs, {...fileOptions(docs[0]), name:'선택한_문서'}));
     if(file) { downloadDocumentFile(file); toast('선택한 문서를 한 파일로 다운로드했습니다.'); }
   });
   intercept('shareSelected', async () => {
     const docs = selectedDocuments(); if (!docs.length) return toast('문서를 선택해 주세요.');
+    assertDocumentReady(docs);
     const files = await run('공유 파일을 만드는 중…', () => Promise.all(docs.map(d => buildDocumentFile(d,fileOptions(d)))));
     if(!files)return;
     preparedFileDialog(files, {title:'선택 문서 공유'});
@@ -125,12 +129,12 @@ export function installWebParity(api) {
   intercept('deleteSelected', async () => {
     const docs = selectedDocuments(); if (!docs.length) return toast('문서를 선택해 주세요.');
     if (!await confirmation('문서 삭제', `선택한 문서 ${docs.length}개를 휴지통으로 옮길까요?`)) return;
-    const ids = new Set(docs.map(d=>d.id)); ws().trash.unshift(...docs.map(d=>({...d,deletedAt:Date.now()})));
+    const ids = new Set(docs.map(d=>d.id)); docs.forEach(d=>{d.deletedAt=Date.now();}); ws().trash.unshift(...docs);
     ws().documents = ws().documents.filter(d=>!ids.has(d.id)); await saveWorkspace(); renderHistory(); toast('휴지통으로 옮겼습니다.');
   });
   intercept('deleteDocument', async () => {
     const d=getActiveDocument(); if (!d || !await confirmation('문서 삭제','이 작업을 휴지통으로 옮길까요?')) return;
-    ws().documents=ws().documents.filter(x=>x.id!==d.id); ws().trash.unshift({...d,deletedAt:Date.now()}); await saveWorkspace(); renderHistory(); showScreen('historyScreen');
+    ws().documents=ws().documents.filter(x=>x.id!==d.id); d.deletedAt=Date.now(); ws().trash.unshift(d); await saveWorkspace(); renderHistory(); showScreen('historyScreen');
   });
   const expiredTrash=()=>ws().trash.filter(d=>d.deletedAt&&Date.now()-d.deletedAt>Number(ws().settings.trashDays||30)*86400000);
   intercept('purgeExpiredTrash',async()=>{
@@ -139,13 +143,13 @@ export function installWebParity(api) {
     const ids=new Set(docs.map(d=>d.id));ws().trash=ws().trash.filter(d=>!ids.has(d.id));await saveWorkspace();api.renderTrash();
   });
   intercept('exitScanner', async () => {
-    if (working || api.isPhotoProcessing?.()) return toast('사진 처리가 끝난 뒤 나갈 수 있어요.');
+    if (working || api.isCapturing?.()) return toast('사진 촬영이 끝난 뒤 나갈 수 있어요.');
     const cameraDoc=api.getCameraDocument?.();
     if(cameraDoc && cameraDoc!==ws().draft){stopCamera();renderDetail(cameraDoc.id);return;}
     if (!ws().draft?.photos.length) {stopCamera(); showScreen('homeScreen'); return;}
     const choice = await dialog('촬영 중인 작업', `<p>사진 ${ws().draft.photos.length}장이 아직 작업 목록에 저장되지 않았어요.</p>`, [{label:'계속 촬영',value:'continue'},{label:'저장하기',value:'save'},{label:'저장하지 않고 나가기',value:'discard',danger:true}]);
     if(choice?.action === 'save') {saveReturnToResult=false;api.showDocumentSaveScreen();}
-    if(choice?.action === 'discard') {ws().draft=null; api.normalizeDraftResults(); await saveWorkspace(); stopCamera(); showScreen('homeScreen');}
+    if(choice?.action === 'discard') {const id=ws().draft?.id;ws().draft=null;if(id)api.cancelPhotoJobs?.(id);api.normalizeDraftResults(); await saveWorkspace(); stopCamera(); showScreen('homeScreen');}
   });
   intercept('saveFromResult', async () => {
     const r=getResult(); if(r.doc) {saveReturnToResult=true;api.showDocumentSaveScreen(r.doc);}
@@ -235,6 +239,7 @@ export function installWebParity(api) {
   intercept('deleteSelectedPhotos',async()=>{
     const d=getActiveDocument();if(!d||!selectedPhotos.size)return;
     if(!await confirmation('선택한 사진 삭제',`선택한 사진 ${selectedPhotos.size}장을 인식 기록과 함께 삭제할까요? 이 브라우저의 이 문서에서만 삭제됩니다.`))return;
+    api.cancelPhotoJobs?.(d.id,d.photos.filter(p=>selectedPhotos.has(p.id||p.name)).map(p=>p.id));
     d.photos=d.photos.filter(p=>!selectedPhotos.has(p.id||p.name));selectedPhotos.clear();await saveWorkspace();
     if(d.photos.length)renderDetail(d.id);else{renderHistory();showScreen('historyScreen');}toast('선택한 사진과 인식 기록을 삭제했습니다.');
   });
@@ -252,6 +257,8 @@ export function installWebParity(api) {
 
   intercept('retryPhoto',async()=>{
     const {doc,photo}=resultPhoto();if(!photo)return;
+    if(api.isPhotoPending?.(photo)||photo.scanState==='scanning')return toast('이 사진을 인식 중입니다. 완료되면 자동으로 표시됩니다.');
+    if(api.rescanPhoto){await api.rescanPhoto(doc,photo);toast(`다시 인식 완료 · 읽음 ${(photo.hits||[]).filter(h=>photoMarker(h,0).state==='decoded').length}개`);return;}
     await run('이 사진을 다시 인식하는 중…',async()=>{
       try {
         const r=await scanPhoto(photo.blob),sx=r.width/r.canvasWidth,sy=r.height/r.canvasHeight;
@@ -263,12 +270,14 @@ export function installWebParity(api) {
   });
   intercept('rotateResultPhoto',async()=>{
     const {photo,doc}=resultPhoto();if(!photo)return;
+    if(api.isPhotoPending?.(photo)||photo.scanState==='scanning')return toast('이 사진의 인식이 끝난 뒤 회전해 주세요.');
     await run('사진과 바코드 좌표를 회전하는 중…',async()=>{
       const bitmap=await loadImage(photo.blob),canvas=document.createElement('canvas');canvas.width=bitmap.height;canvas.height=bitmap.width;
       const c=canvas.getContext('2d');c.translate(canvas.width,0);c.rotate(Math.PI/2);c.drawImage(bitmap,0,0);bitmap.close();
       const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.96));if(!blob)throw new Error('사진 회전에 실패했습니다.');
-      const oldHeight=photo.scanHeight||photo.height;
-      photo.hits=photo.hits.map(h=>({...h,left:oldHeight-h.bottom,top:h.left,right:oldHeight-h.top,bottom:h.right}));
+      const oldHeight=photo.scanHeight||photo.height||canvas.width;
+      photo.hits=photo.hits.map(h=>rotatePhotoHit(h,oldHeight));
+      if(Array.isArray(photo.rawHits))photo.rawHits=photo.rawHits.map(h=>rotatePhotoHit(h,oldHeight));
       photo.blob=blob;photo.type=blob.type;photo.width=canvas.width;photo.height=canvas.height;photo.scanWidth=canvas.width;photo.scanHeight=canvas.height;
       if(doc===ws().draft)api.normalizeDraftResults();await saveWorkspace();renderPhotoResult();toast('사진과 인식 위치를 시계 방향 90° 회전했습니다.');
     });
@@ -283,14 +292,30 @@ export function installWebParity(api) {
     document.body.append(dialogEl);dialogEl.showModal();
     const viewport=dialogEl.querySelector('.zoom-viewport'),canvas=dialogEl.querySelector('canvas'),context=canvas.getContext('2d');
     // The stored photo stays full resolution; the viewer limits its display surface.
+    const sourceWidth=photo.scanWidth||photo.width||image.width,sourceHeight=photo.scanHeight||photo.height||image.height;
     const ratio=Math.min(1,3000/Math.max(image.width,image.height));canvas.width=Math.round(image.width*ratio);canvas.height=Math.round(image.height*ratio);context.drawImage(image,0,0,canvas.width,canvas.height);image.close();
-    if(withOverlay)for(const [i,h] of hits.entries()){
-      const sx=canvas.width/(photo.scanWidth||photo.width),sy=canvas.height/(photo.scanHeight||photo.height),x=h.left*sx,y=h.top*sy,w=(h.right-h.left)*sx,hh=(h.bottom-h.top)*sy;
-      context.lineWidth=Math.max(2,canvas.width/500);context.strokeStyle=i===focusIndex?'#f79009':'#12b76a';context.strokeRect(x,y,w,hh);context.font=`bold ${Math.max(14,canvas.width/70)}px sans-serif`;context.fillStyle=context.strokeStyle;context.fillText(`${i+1} ✓`,x,Math.max(18,y-4));
+    const annotations=document.createElement('canvas');annotations.className='zoom-annotations';
+    annotations.style.cssText='position:absolute;inset:0;left:0;top:0;width:100%;height:100%;transform:none;pointer-events:none';viewport.append(annotations);
+    function paintMarkers(){
+      const w=viewport.clientWidth,h=viewport.clientHeight,dpr=Math.min(devicePixelRatio||1,2);
+      annotations.width=Math.max(1,Math.round(w*dpr));annotations.height=Math.max(1,Math.round(h*dpr));
+      const c=annotations.getContext('2d');c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,w,h);if(!withOverlay||!w||!h)return;
+      const factor=fit()*scale,sx=canvas.width/sourceWidth*factor,sy=canvas.height/sourceHeight*factor,ox=w/2-canvas.width*factor/2+x,oy=h/2-canvas.height*factor/2+y;
+      c.lineWidth=2;c.font='bold 12px system-ui';
+      hits.forEach((hit,i)=>{
+        if(![hit.left,hit.top,hit.right,hit.bottom].every(Number.isFinite)||[hit.left,hit.top,hit.right,hit.bottom].every(v=>v===0))return;
+        const left=ox+Math.min(hit.left,hit.right)*sx,top=oy+Math.min(hit.top,hit.bottom)*sy;
+        const actualW=Math.abs(hit.right-hit.left)*sx,actualH=Math.abs(hit.bottom-hit.top)*sy,bw=Math.max(18,actualW),bh=Math.max(18,actualH);
+        const bx=left-(bw-actualW)/2,by=top-(bh-actualH)/2,marker=photoMarker(hit,i,i===focusIndex);
+        if(bx+bw<0||by+bh<0||bx>w||by>h)return;
+        c.strokeStyle=marker.color;c.strokeRect(bx,by,bw,bh);
+        const textWidth=c.measureText(marker.label).width+10,tx=Math.max(0,Math.min(w-textWidth,bx)),ty=Math.max(0,Math.min(h-20,by-21));
+        c.fillStyle=marker.color;c.fillRect(tx,ty,textWidth,20);c.fillStyle='#fff';c.fillText(marker.label,tx+5,ty+14);
+      });
     }
     let scale=1,x=0,y=0;const pointers=new Map();let gesture=null;
     const fit=()=>Math.min(viewport.clientWidth/canvas.width,viewport.clientHeight/canvas.height);
-    const paint=()=>{canvas.style.width=canvas.width*fit()+'px';canvas.style.height=canvas.height*fit()+'px';canvas.style.transform=`translate(calc(-50% + ${x}px),calc(-50% + ${y}px)) scale(${scale})`;};
+    const paint=()=>{canvas.style.width=canvas.width*fit()+'px';canvas.style.height=canvas.height*fit()+'px';canvas.style.transform=`translate(calc(-50% + ${x}px),calc(-50% + ${y}px)) scale(${scale})`;paintMarkers();};
     const reset=()=>{scale=1;x=0;y=0;paint();};
     const close=()=>{zoomCleanup();dialogEl.close();dialogEl.remove();};
     dialogEl.querySelector('[data-close]').onclick=close;dialogEl.querySelector('[data-reset]').onclick=reset;dialogEl.addEventListener('cancel',e=>{e.preventDefault();close();});
@@ -300,12 +325,14 @@ export function installWebParity(api) {
     viewport.onpointerdown=e=>{viewport.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});startGesture();};
     viewport.onpointermove=e=>{if(!pointers.has(e.pointerId))return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});const p=[...pointers.values()];if(p.length>1&&gesture.distance){scale=Math.max(1,Math.min(12,gesture.scale*Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)/gesture.distance));}else{x=gesture.x+p[0].x-gesture.point.x;y=gesture.y+p[0].y-gesture.point.y;}paint();};
     viewport.onpointerup=viewport.onpointercancel=e=>{pointers.delete(e.pointerId);if(pointers.size)startGesture();};viewport.ondblclick=reset;
-    const resize=()=>paint();window.addEventListener('resize',resize);zoomCleanup=()=>window.removeEventListener('resize',resize);paint();
-    if(Number.isInteger(focusIndex)&&hits[focusIndex]){const h=hits[focusIndex],cx=(h.left+h.right)/2/(photo.scanWidth||photo.width)*canvas.width,cy=(h.top+h.bottom)/2/(photo.scanHeight||photo.height)*canvas.height;scale=3;x=(canvas.width/2-cx)*fit()*scale;y=(canvas.height/2-cy)*fit()*scale;paint();}
+    const resize=()=>paint();window.addEventListener('resize',resize);const observer=typeof ResizeObserver==='function'?new ResizeObserver(paint):null;observer?.observe(viewport);zoomCleanup=()=>{window.removeEventListener('resize',resize);observer?.disconnect();};paint();
+    if(Number.isInteger(focusIndex)&&hits[focusIndex]){const h=hits[focusIndex],cx=(h.left+h.right)/2/sourceWidth*canvas.width,cy=(h.top+h.bottom)/2/sourceHeight*canvas.height;scale=3;x=(canvas.width/2-cx)*fit()*scale;y=(canvas.height/2-cy)*fit()*scale;paint();}
   }
   $('photoOriginalImage').addEventListener('click',()=>openZoom(false).catch(e=>toast(e.message)));
   $('photoResultImageWrap').addEventListener('click',()=>openZoom(true).catch(e=>toast(e.message)));
-  $('photoResultList').addEventListener('click',e=>{const row=e.target.closest('li');if(!row)return;const i=[...row.parentElement.children].indexOf(row);if(i<getResult().doc?.photos[getResult().photoIndex]?.hits.length)openZoom(true,i).catch(e=>toast(e.message));});
+  const focusPhotoHit=e=>{const row=e.target.closest('[data-hit-index]');if(!row)return;const i=Number(row.dataset.hitIndex);if(Number.isInteger(i)&&i>=0&&i<getResult().doc?.photos[getResult().photoIndex]?.hits.length)openZoom(true,i).catch(e=>toast(e.message));};
+  $('photoResultList').addEventListener('click',focusPhotoHit);
+  $('photoResultList').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();focusPhotoHit(e);}});
   for(const id of ['photoOriginalImage','photoResultImageWrap']){$(id).tabIndex=0;$(id).setAttribute('role','button');$(id).setAttribute('aria-label',id==='photoOriginalImage'?'원본 사진 크게 보기':'인식 결과 크게 보기');$(id).addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$(id).click();}});}
 
   const refresh=()=>{
@@ -313,7 +340,9 @@ export function installWebParity(api) {
     if(currentScreen()==='detailScreen')decorateDetail();
     if(currentScreen()==='trashScreen'){$('purgeExpiredTrash').classList.toggle('hidden',!expiredTrash().length);$('purgeExpiredTrash').textContent=`보관 기간 지난 문서 ${expiredTrash().length}개 정리`;}
     if(currentScreen()==='photoResultScreen'){
-      const {photo}=resultPhoto();$('photoScanError').textContent=photo?.scanError?`인식 오류: ${photo.scanError} · 다시 인식을 눌러 주세요.`:'';
+      const {photo}=resultPhoto(),pending=api.isPhotoPending?.(photo)||photo?.scanState==='scanning';
+      $('retryPhoto').disabled=!!pending;$('rotateResultPhoto').disabled=!!pending;
+      $('photoScanError').textContent=photo?.scanError?`인식 오류: ${photo.scanError} · 다시 인식을 눌러 주세요.`:'';
     }
   };
   const observer=new MutationObserver(refresh);

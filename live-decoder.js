@@ -4,10 +4,10 @@ export function stopLiveDecoder() {
   if(pending){clearTimeout(pending.timer);pending.reject(new DOMException('카메라 인식 중단','AbortError'));pending=null;}
 }
 export function decodeLiveFrame(image) {
-  if(typeof Worker!=='function')return import('./photo-engine.js?v=18').then(engine=>engine.scanFramePixels(image));
+  if(typeof Worker!=='function')return import('./photo-engine.js?v=19').then(engine=>engine.scanFramePixels(image));
   if(pending)return Promise.reject(new Error('이전 프레임 인식 중입니다.'));
   if(!worker){
-    worker=new Worker(new URL('./live-worker.js?v=18',import.meta.url),{type:'module'});
+    worker=new Worker(new URL('./live-worker.js?v=19',import.meta.url),{type:'module'});
     const owner=worker;
     worker.onmessage=({data})=>{
       if(worker!==owner||!pending||data.id!==pending.id)return;

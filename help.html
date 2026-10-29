@@ -7,14 +7,14 @@
   <title>사용방법 · BatchBarcode Snap</title>
   <meta name="description" content="사진 선택부터 바코드 확인, 문서 저장과 파일 공유까지 처음 사용하는 분을 위한 안내입니다." />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="./help.css?v=web18" />
-  <script src="./help.js?v=web18" defer></script>
+  <link rel="stylesheet" href="./help.css?v=web19" />
+  <script src="./help.js?v=web19" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#steps">사용 순서로 바로 가기</a>
   <header class="guide-header">
-    <a class="brand" href="./?v=web18" aria-label="BatchBarcode Snap 홈으로">BatchBarcode Snap</a>
-    <a class="header-link" href="./?v=web18">웹앱 열기 <span aria-hidden="true">↗</span></a>
+    <a class="brand" href="./?v=web19" aria-label="BatchBarcode Snap 홈으로">BatchBarcode Snap</a>
+    <a class="header-link" href="./?v=web19">웹앱 열기 <span aria-hidden="true">↗</span></a>
   </header>
   <main>
     <section class="intro" aria-labelledby="guide-title">
@@ -27,7 +27,7 @@
         <li><span aria-hidden="true">↓</span>저장·공유</li>
       </ol>
       <div class="intro-actions">
-        <a class="button primary" href="./?v=web18">웹앱에서 시작하기 <span aria-hidden="true">→</span></a>
+        <a class="button primary" href="./?v=web19">웹앱에서 시작하기 <span aria-hidden="true">→</span></a>
         <button class="button subtle" id="shareGuide" type="button">안내 링크 공유</button>
       </div>
       <p class="share-status" id="shareStatus" role="status" aria-live="polite"></p>
@@ -56,8 +56,8 @@
           <h2 id="camera-title">카메라로 촬영할 수도 있어요</h2>
           <p>홈의 <strong>바코드 촬영 및 스캔</strong>을 누르세요. 카메라 권한을 묻는 창이 나오면 <strong>허용</strong>하고, 라벨에 초점을 맞춘 뒤 아래의 <strong>둥근 촬영 버튼</strong>을 누르세요.</p>
           <div class="capture-sample" aria-label="촬영 화면 아래의 둥근 카메라 버튼을 누릅니다"><span>사진 수</span><span class="shutter-sample" aria-hidden="true"><svg class="guide-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5 6 8H3v12h18V8h-3l-2-3Z"/><circle cx="12" cy="13" r="4"/></svg></span><span>사진 불러오기</span></div>
-          <p class="small-note">촬영이 끝나면 촬영 버튼 위의 <strong>마지막 촬영 · … · 결과 보기</strong>를 눌러 원본 사진과 인식 결과를 확인하세요.</p>
-          <p class="small-note">카메라의 주황 표시는 확인 중이며, 같은 바코드를 두 번 읽으면 초록 체크로 바뀝니다. 아래의 사진 기록 수는 촬영한 사진에서 읽은 수라서 카메라 표시와 다를 수 있습니다.</p>
+          <p class="small-note">촬영이 끝나면 아래의 <strong>현재 인식 바코드 목록</strong>이나 <strong>마지막 촬영 · … · 결과 보기</strong>를 눌러 원본 사진과 인식 결과를 확인하세요.</p>
+          <p class="small-note">사진은 기기에 먼저 저장하고 차례로 인식하므로 인식 중에도 다음 사진을 찍을 수 있어요. 인식 중인 사진은 완료되면 결과 화면이 갱신됩니다.</p><p class="small-note">카메라의 주황 표시는 확인 중이며, 같은 바코드를 두 번 읽으면 초록 체크로 바뀝니다. 아래의 사진 기록 수는 촬영한 사진에서 읽은 수라서 카메라 표시와 다를 수 있습니다.</p>
           <p class="small-note">촬영 화면의 <strong>사진 불러오기</strong>로 사진첩을 열 수도 있어요. 카메라를 사용할 수 없는 기기에서는 사진 불러오기를 이용하세요.</p>
         </div>
       </section>
@@ -70,7 +70,7 @@
           <p><strong>사진 인식 결과</strong>에서 사진에 표시된 바코드 위치와 아래의 읽은 값을 비교하세요. 사진이나 결과 항목을 누르면 크게 볼 수 있습니다.</p>
           <div class="result-sample" aria-label="사진의 초록 표시와 아래 데이터가 서로 맞는지 확인합니다"><div class="label-sample"><span class="sample-tag">1 ✓</span><span class="barcode-sample" aria-hidden="true"></span></div><div class="read-sample"><span>1 · 읽음</span><b>사진의 값과 비교하세요</b></div></div>
           <dl class="count-meaning"><div><dt>사진의 읽음 개수</dt><dd>그 사진에서 값을 읽은 바코드 위치 수</dd></div><div><dt>문서 고유 바코드</dt><dd>여러 사진에서 같은 데이터는 한 번만 센 수</dd></div></dl>
-          <p class="small-note">두 개수가 달라도 오류라는 뜻은 아닙니다. 같은 바코드 데이터가 여러 곳에 반복될 수 있어요.</p>
+          <p class="small-note">결과는 <strong>읽음</strong>, <strong>충돌 · 확인 필요</strong>, <strong>읽지 못한 후보</strong>로 나눠 표시합니다. 주황 후보는 값을 읽지 못했거나 서로 다른 값이 나온 곳이며 실제 바코드가 아닐 수도 있어요. 두 개수가 달라도 오류라는 뜻은 아닙니다. 같은 바코드 데이터가 여러 곳에 반복될 수 있어요.</p>
         </div>
       </section>
 
@@ -123,7 +123,7 @@
       <details><summary>사용한 브라우저의 데이터를 지워도 되나요?</summary><p>브라우저 데이터를 지우면 저장된 문서와 사진 기록도 사라질 수 있습니다. 중요한 결과를 먼저 파일로 내보내고 원본 사진을 따로 보관해 주세요.</p></details>
     </section>
 
-    <section class="ready"><div><span class="eyebrow">이제 시작해 볼까요?</span><h2>첫 사진 한 장부터 해보세요.</h2></div><a class="button primary" href="./?v=web18">웹앱 열기 <span aria-hidden="true">→</span></a></section>
+    <section class="ready"><div><span class="eyebrow">이제 시작해 볼까요?</span><h2>첫 사진 한 장부터 해보세요.</h2></div><a class="button primary" href="./?v=web19">웹앱 열기 <span aria-hidden="true">→</span></a></section>
   </main>
   <footer class="guide-footer"><span>BatchBarcode Snap · 사용방법</span><button id="printGuide" type="button">인쇄 / PDF로 보관</button></footer>
 </body>
