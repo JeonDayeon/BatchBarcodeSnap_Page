@@ -1,9 +1,11 @@
-import { installWebParity } from "./web-parity.js?v=17";
-import { decodePhotoFile } from "./photo-decoder.js?v=17";
+import { installWebParity } from "./web-parity.js?v=18";
+import { decodePhotoFile } from "./photo-decoder.js?v=18";
+import { decodeLiveFrame, stopLiveDecoder } from "./live-decoder.js?v=18";
+import { captureCameraPhoto } from "./camera-photo.js?v=18";
 function redrawPhotoOverlay(){
   const d=resultIsDraft?workspace.draft:workspace.documents.find(x=>x.id===resultDocumentId),p=d?.photos[resultPhotoIndex];
   if(!p||!document.getElementById('photoResultScreen').classList.contains('active'))return;
-  const boxes=orderOnePhotoRightToLeft(p.hits||[]).map((h,i)=>({...h,id:i+1,box:h,stable:true,lastSeen:Date.now()}));
+  const boxes=orderOnePhotoRightToLeft(p.hits||[]).map((h,i)=>({...h,id:i+1,box:h,stable:!h.hasConflict&&h.recognized!==false,lastSeen:Date.now()}));
   drawOverlay(document.getElementById('photoResultOverlay'),boxes,p.scanWidth||p.width||document.getElementById('photoResultImage').naturalWidth,p.scanHeight||p.height||document.getElementById('photoResultImage').naturalHeight);
 }
 let BarcodeFormat, BinaryBitmap, DecodeHintType, HybridBinarizer, MultiFormatReader, RGBLuminanceSource;
@@ -13,10 +15,9 @@ const zxingReadyPromise = import("https://esm.sh/@zxing/library@0.21.3").then(mo
   const formats = [BarcodeFormat.CODE_128, BarcodeFormat.DATA_MATRIX, BarcodeFormat.QR_CODE, BarcodeFormat.CODE_39, BarcodeFormat.CODE_93, BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.ITF, BarcodeFormat.AZTEC, BarcodeFormat.PDF_417];
   const hints = new Map([[DecodeHintType.POSSIBLE_FORMATS, formats], [DecodeHintType.TRY_HARDER, true]]);
   reader = new MultiFormatReader(); reader.setHints(hints); zxingReady = true;
-  const status = document.getElementById("liveStatus"); if (status && status.textContent === "카메라를 시작해 바코드를 찾으세요.") status.textContent = "ZXing 인식 엔진 준비됨 · 카메라를 시작하세요.";
+  // Kept as a fallback; the main live and photo decoders use the local WASM module.
 }).catch(error => {
-  console.error("ZXing-JS load failed", error);
-  const status = document.getElementById("liveStatus"); if (status) status.textContent = "인식 엔진 연결 실패 · 인터넷 연결을 확인하고 새로고침하세요.";
+  console.warn("ZXing-JS fallback load failed", error);
 });
 
 const $ = (id) => document.getElementById(id);
@@ -28,8 +29,9 @@ let currentPhotos = [], persistenceTimer = 0, databasePromise = null;
 let autoCaptureStreak = 0, lastAutoCaptureAt = 0;
 let autoCaptureSignature='',lastAutoCaptureSignature='',emptyCaptureFrames=0;
 let cameraRequestId = 0, cameraStartPromise = null, photoProcessing = false, captureInProgress = false;
+let liveEngineFallback = false;
 let cameraDocumentId = null, saveTargetId = null, photoPreviewUrl = null, detailPreviewUrls = [];
-const CONFIRM_FRAMES = 2, KEEP_MS = 950, SCAN_MS = 180, MAX_FRAME_SIDE = 1600;
+const CONFIRM_FRAMES = 2, KEEP_MS = 950, SCAN_MS = 180, MAX_FRAME_SIDE = 1920;
 
 function openLocalDatabase() {
   if (databasePromise) return databasePromise;
@@ -199,8 +201,9 @@ function updateTracks(detections, now, gray, grayWidth, grayHeight, scale) {
       track.hits++; track.lastSeen = now;
     }
     used.add(track.id);
+    track.hasConflict=!!detection.hasConflict;
     if(track.features.length<3)track.features=seedFlowFeatures({left:track.box.left*scale,top:track.box.top*scale,right:track.box.right*scale,bottom:track.box.bottom*scale},gray,grayWidth,grayHeight);
-    if (track.hits + 1 >= CONFIRM_FRAMES) track.stable = true;
+    track.stable = !track.hasConflict && track.hits + 1 >= CONFIRM_FRAMES;
     if (track.stable && !track.registered) {
       track.registered = true; results.push({ id:track.id,value:track.value,format:track.format,left:detection.left,top:detection.top,right:detection.right,bottom:detection.bottom,firstSeen:now });
     }
@@ -219,11 +222,12 @@ function drawOverlay(canvas, boxes, sourceW, sourceH, fit="contain") {
   const rect = canvas.getBoundingClientRect(), {w,h,dpr} = canvasSize(canvas,rect), c=canvas.getContext("2d");
   c.clearRect(0,0,w,h); c.lineWidth=2*dpr; c.font=`bold ${12*dpr}px system-ui`;
   for (const track of boxes) {
-    if (!track.stable) continue;
     const b=mapCover(track.box,sourceW,sourceH,w,h,fit), age=Date.now()-track.lastSeen;
-    c.globalAlpha=Math.max(.25,1-age/KEEP_MS); c.strokeStyle="#12b76a"; c.fillStyle="#12b76a";
+    if(age>KEEP_MS && canvas===overlay)continue;
+    const color=track.stable?"#12b76a":"#f79009";
+    c.globalAlpha=canvas===overlay?Math.max(.35,1-age/KEEP_MS):1; c.strokeStyle=color; c.fillStyle=color;
     c.strokeRect(b.left,b.top,b.right-b.left,b.bottom-b.top);
-    const tag=`${track.id} ✓`; const tw=c.measureText(tag).width+10*dpr;
+    const tag=canvas===overlay?(track.stable?"✓ 읽음":"확인 중"):`${track.id} ${track.stable?"✓":"?"}`; const tw=c.measureText(tag).width+10*dpr;
     c.fillRect(b.left,Math.max(0,b.top-20*dpr),tw,20*dpr); c.fillStyle="#fff"; c.fillText(tag,b.left+5*dpr,Math.max(14*dpr,b.top-6*dpr));
   }
   c.globalAlpha=1;
@@ -231,17 +235,22 @@ function drawOverlay(canvas, boxes, sourceW, sourceH, fit="contain") {
 async function scanFrame(now) {
   if (!running) return;
   raf=requestAnimationFrame(scanFrame);
-  if (!zxingReady || photoProcessing) return;
+  if (photoProcessing) return;
+  if(liveEngineFallback&&!zxingReady){setStatus("실시간 인식기를 준비하지 못했습니다. 새로고침하거나 사진 불러오기를 사용해 주세요.");return;}
   if (typeof workspace !== "undefined" && !workspace.settings.auto) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1,"cover"); return; }
   if (!video.videoWidth || busy || now-lastScan<SCAN_MS) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1,"cover"); return; }
-  lastScan=now; busy=true;
-  const scale=Math.min(1,MAX_FRAME_SIDE/Math.max(video.videoWidth,video.videoHeight));
-  scanCanvas.width=Math.round(video.videoWidth*scale); scanCanvas.height=Math.round(video.videoHeight*scale);
+  lastScan=now; busy=true;const requestId=cameraRequestId;
+  const sourceWidth=video.videoWidth,sourceHeight=video.videoHeight,scale=Math.min(1,MAX_FRAME_SIDE/Math.max(sourceWidth,sourceHeight));
+  const width=Math.round(sourceWidth*scale),height=Math.round(sourceHeight*scale);
+  if(scanCanvas.width!==width||scanCanvas.height!==height){tracks=[];previousGray=null;previousScanMs=0;}
+  scanCanvas.width=width;scanCanvas.height=height;
   scanCtx.drawImage(video,0,0,scanCanvas.width,scanCanvas.height);
   try {
     const gray=grayscaleFrame();
     advanceOpticalTracks(gray,scanCanvas.width,scanCanvas.height,now,scale);
-    const detections=decodeCanvas().map(b=>({...b,left:b.left/scale,top:b.top/scale,right:b.right/scale,bottom:b.bottom/scale}));
+    const raw=liveEngineFallback?decodeCanvas():await decodeLiveFrame(scanCtx.getImageData(0,0,scanCanvas.width,scanCanvas.height));
+    if(requestId!==cameraRequestId||!running||photoProcessing||video.videoWidth!==sourceWidth||video.videoHeight!==sourceHeight||!$("scannerScreen").classList.contains("active"))return;
+    const detections=raw.map(b=>({...b,left:b.left/scale,top:b.top/scale,right:b.right/scale,bottom:b.bottom/scale}));
     updateTracks(detections,Date.now(),gray,scanCanvas.width,scanCanvas.height,scale);
     const signature=[...new Set(detections.map(h=>h.format+'\u0000'+h.value))].sort().join('\u0001');
     autoCaptureStreak=workspace.settings.autoCapture&&signature?signature===autoCaptureSignature?autoCaptureStreak+1:1:0;autoCaptureSignature=signature;
@@ -249,7 +258,11 @@ async function scanFrame(now) {
     if(autoCaptureStreak >= 4 && signature!==lastAutoCaptureSignature && Date.now()-lastAutoCaptureAt > 3000 && !photoProcessing && !captureInProgress){
       autoCaptureStreak=0;lastAutoCaptureAt=Date.now();lastAutoCaptureSignature=signature;queueMicrotask(()=>{if(running&&workspace.settings.autoCapture)captureFrame();});
     }
-    setStatus(detections.length?`프레임 검출 ${detections.length} · 누적 ${results.length}`:"바코드 탐색 중");
+    const confirmed=tracks.filter(t=>t.stable&&Date.now()-t.lastSeen<KEEP_MS).length;
+    $("frameCount").textContent=`현재 화면 · ✓ 읽음 ${confirmed}개`;
+    setStatus(detections.length?`현재 검출 ${detections.length}개 · ✓ 확인 ${confirmed}개 · 촬영하면 사진에 기록됩니다.`:"바코드 탐색 중 · 주황: 확인 중 / 초록 ✓: 읽음");
+  } catch(error) {
+    if(error.name!=="AbortError"&&requestId===cameraRequestId&&running){console.error("Live decode failed",error);liveEngineFallback=true;setStatus("실시간 인식 엔진 연결 실패 · 기본 인식으로 다시 찾습니다.");}
   } finally { busy=false; }
   drawOverlay(overlay,tracks,video.videoWidth,video.videoHeight,"cover");
   frames++; if(now-lastCountAt>=1000){$("fps").textContent=`${frames} fps`;frames=0;lastCountAt=now;}
@@ -268,14 +281,14 @@ async function startCamera() {
     if (requestId !== cameraRequestId) { acquired.getTracks().forEach(t=>t.stop()); return; }
     running=true; $("cameraPlaceholder").classList.add("hidden");
     $("startCamera").disabled=true; setStatus("카메라 실행 중");
-    autoCaptureStreak=0;
+    autoCaptureStreak=0;liveEngineFallback=false;
     if(workspace.settings.torch) await applyTorch();
     raf=requestAnimationFrame(scanFrame);
     } catch(error) { if(requestId!==cameraRequestId)return;stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;setStatus(error.name==="NotAllowedError"?"카메라 권한이 허용되지 않았습니다. 브라우저 설정에서 허용한 뒤 다시 시작하세요.":/device not found|requested device/i.test(error.message||"")||error.name==="NotFoundError"?"이 기기에서 카메라를 찾지 못했어요. 갤러리에서 사진을 불러와 스캔할 수 있습니다.":error.message||"카메라를 시작하지 못했습니다."); }
   })();
   try { await cameraStartPromise; } finally { if(requestId===cameraRequestId)cameraStartPromise=null; }
 }
-function stopCamera() { ++cameraRequestId;cameraStartPromise=null;running=false; cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(t=>t.stop()); stream=null; video.srcObject=null; tracks=[]; previousGray=null; previousScanMs=0;torchOn=false;$("torchButton").classList.remove("active");$("torchButton").innerHTML="▯<small>손전등 OFF</small>"; ctx.clearRect(0,0,overlay.width,overlay.height); $("startCamera").disabled=false; $("cameraPlaceholder").classList.remove("hidden"); setStatus("카메라가 종료됐습니다."); }
+function stopCamera() { ++cameraRequestId;stopLiveDecoder();cameraStartPromise=null;running=false; cancelAnimationFrame(raf); if(stream) stream.getTracks().forEach(t=>t.stop()); stream=null; video.srcObject=null; tracks=[]; previousGray=null; previousScanMs=0;torchOn=false;$("torchButton").classList.remove("active");$("torchButton").innerHTML="▯<small>손전등 OFF</small>"; ctx.clearRect(0,0,overlay.width,overlay.height); $("startCamera").disabled=false; $("cameraPlaceholder").classList.remove("hidden"); setStatus("카메라가 종료됐습니다."); }
 function renderResults() { if (typeof workspace !== "undefined") updateDraftSummary(); }
 function orderRightToLeftColumns(items) {
   const groups=new Map();for(const item of items){const key=item.photoIndex??-1;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
@@ -311,19 +324,19 @@ function syncControlSettings(){
 function toast(message){const el=$("toast");el.textContent=message;el.classList.remove("hidden");clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.add("hidden"),2400);}
 async function getWorkspace(){const db=await openLocalDatabase();return new Promise((resolve,reject)=>{const req=db.transaction("snapshots","readonly").objectStore("snapshots").get("workspace");req.onsuccess=()=>resolve(req.result?.workspace||null);req.onerror=()=>reject(req.error);});}
 async function saveWorkspace(){if(!workspaceReady)await workspaceReadyPromise;const db=await openLocalDatabase();await new Promise((resolve,reject)=>{const tx=db.transaction("snapshots","readwrite");tx.objectStore("snapshots").put({id:"workspace",savedAt:Date.now(),workspace});tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error("기기 저장이 중단되었습니다."));});$("storageStatus")&&($("storageStatus").textContent="이 기기에 저장됨");}
-function uniqueBarcodes(doc){const map=new Map();for(const [photoIndex,photo] of (doc.photos||[]).entries())for(const hit of photo.hits||[]){const key=`${hit.format}\u0000${hit.value}`;if(!map.has(key))map.set(key,{...hit,photoIndex});}return [...map.values()];}
-function updateDraftSummary(){const d=currentCameraDocument(),photos=d?.photos||[],count=photos.reduce((n,p)=>n+(p.hits?.length||0),0),unique=d?uniqueBarcodes(d).length:0;$("captureCount").innerHTML=`사진 ${photos.length}장<br />한 문서에 계속 추가`;$("scanSummary").textContent=`이번 문서 · 사진 ${photos.length}장 · 검출 ${count}개 · 고유 바코드 ${unique}개`;$("showDraftDetail").innerHTML=`현재 인식 바코드 목록<br /><small>문서 고유 ${unique}개</small>`;const last=photos.at(-1);$("showDraftPhotoResult").textContent=last?`마지막 촬영 · 인식 ${last.hits?.length||0}개${last.scanError?" · 재시도 필요":""} · 결과 보기`:"촬영 후 인식 결과가 여기에 표시됩니다.";}
+function uniqueBarcodes(doc){const map=new Map();for(const [photoIndex,photo] of (doc.photos||[]).entries())for(const hit of photo.hits||[]){if(hit.hasConflict||hit.recognized===false)continue;const key=`${hit.format}\u0000${hit.value}`;if(!map.has(key))map.set(key,{...hit,photoIndex});}return [...map.values()];}
+function updateDraftSummary(){const d=currentCameraDocument(),photos=d?.photos||[],count=photos.reduce((n,p)=>n+(p.hits||[]).filter(h=>!h.hasConflict&&h.recognized!==false).length,0),unique=d?uniqueBarcodes(d).length:0;$("captureCount").innerHTML=`사진 ${photos.length}장<br />한 문서에 계속 추가`;$("scanSummary").textContent=`촬영 사진 ${photos.length}장 · 읽음 ${count}개 · 고유 바코드 ${unique}개`;$("showDraftDetail").innerHTML=`촬영 사진 바코드 목록<br /><small>문서 고유 ${unique}개</small>`;const last=photos.at(-1);$("showDraftPhotoResult").disabled=photoProcessing;$("showDraftPhotoResult").textContent=photoProcessing?"사진 인식 중… 완료 후 결과를 확인하세요.":last?`마지막 촬영 · 읽음 ${(last.hits||[]).filter(h=>!h.hasConflict&&h.recognized!==false).length}개${last.scanError?" · 재시도 필요":""} · 결과 보기`:"촬영 후 인식 결과가 여기에 표시됩니다.";}
 function normalizeDraftResults(){results=[];let id=1;currentCameraDocument()?.photos.forEach((photo,photoIndex)=>(photo.hits||[]).forEach(hit=>results.push({...hit,id:id++,photoIndex,sourceName:photo.name,firstSeen:Date.now()})));nextId=id;}
 async function resumeCameraView(){await workspaceReadyPromise;normalizeDraftResults();renderResults();syncControlSettings();showScreen("scannerScreen");if(!running)startCamera();}
 async function openDraft(){await workspaceReadyPromise;cameraDocumentId=null;if(!workspace.draft)workspace.draft=createDraft();return resumeCameraView();}
 async function openDocumentCamera(doc){await workspaceReadyPromise;if(!doc||!workspace.documents.some(d=>d.id===doc.id))return;cameraDocumentId=doc.id;return resumeCameraView();}
 function renderHistory(){const query=$("historySearch").value.trim().toLowerCase(),docs=workspace.documents.filter(d=>!d.deletedAt&&(!query||d.name.toLowerCase().includes(query))).sort((a,b)=>(sortNewest?-1:1)*(a.savedAt-b.savedAt));$("historyCount").textContent="저장된 문서 "+docs.length+"개";$("emptyHistory").classList.toggle("hidden",docs.length>0);$("toggleSelect").textContent=selectMode?"선택 완료":"선택";$("historyItems").innerHTML=docs.map(d=>'<div class="history-card"><input type="checkbox" data-select="'+esc(d.id)+'" '+(selectedDocumentIds.has(d.id)?"checked":"")+'><button data-open="'+esc(d.id)+'"><b>'+esc(d.name)+'.'+(d.format||'xlsx')+'</b><small>'+new Date(d.savedAt).toLocaleString("ko-KR")+' · 사진 '+d.photos.length+'장 · 고유 바코드 '+uniqueBarcodes(d).length+'개</small></button></div>').join("");$("historySelection").classList.toggle("hidden",!selectMode);$("selectedCount").textContent=selectedDocumentIds.size+"개 선택";}
-function showCurrentPhotoResult(){const d=currentCameraDocument();if(!d?.photos.length){toast("먼저 사진을 촬영하거나 불러오세요.");return;}resultIsDraft=d===workspace.draft;resultDocumentId=resultIsDraft?null:d.id;resultPhotoIndex=d.photos.length-1;renderPhotoResult();}
-function renderCurrentBarcodeList(){const d=currentCameraDocument();if(!d?.photos.length){toast("먼저 사진을 촬영하거나 불러오세요.");return;}stopCamera();const unique=orderRightToLeftColumns(uniqueBarcodes(d)),pageSize=3,pageCount=Math.max(1,Math.ceil(unique.length/pageSize));barcodePage=Math.max(0,Math.min(barcodePage,pageCount-1));$("currentUniqueCount").textContent=unique.length+"개";$("currentPhotoCount").textContent=`원본 사진 ${d.photos.length}장 유지`;$("barcodeRange").textContent=unique.length?`${barcodePage*pageSize+1}–${Math.min((barcodePage+1)*pageSize,unique.length)} / ${unique.length}개`:`0–0 / 0개`;$("barcodePageLabel").textContent=`${barcodePage+1} / ${pageCount} 페이지`;$("barcodePrevious").disabled=barcodePage===0;$("barcodeNext").disabled=barcodePage>=pageCount-1;const page=unique.slice(barcodePage*pageSize,(barcodePage+1)*pageSize);$("currentBarcodeItems").innerHTML=page.map((h,i)=>`<li><button data-hit-photo="${h.photoIndex}" data-hit-value="${esc(h.value)}" data-hit-format="${esc(h.format)}"><span class="hit-meta">${barcodePage*pageSize+i+1}　${esc(h.format)} <b>✓ 완료</b></span><span>${esc(formatBarcodeValue(h.value))}</span></button></li>`).join("")||"<li class=empty-barcode>아직 인식 완료한 바코드가 없습니다.</li>";$("barcodeListNotice").textContent="ⓘ　완료 상태는 계속 유지됩니다. 같은 데이터는 문서에 중복 추가하지 않습니다.";showScreen("barcodeListScreen");}
+function showCurrentPhotoResult(){if(photoProcessing||captureInProgress){toast("사진 인식 중입니다. 완료될 때까지 기다려 주세요.");return;}const d=currentCameraDocument();if(!d?.photos.length){toast("먼저 사진을 촬영하거나 불러오세요.");return;}resultIsDraft=d===workspace.draft;resultDocumentId=resultIsDraft?null:d.id;resultPhotoIndex=d.photos.length-1;renderPhotoResult();}
+function renderCurrentBarcodeList(){if(photoProcessing||captureInProgress){toast("사진 인식이 끝나면 목록을 확인할 수 있어요.");return;}const d=currentCameraDocument();if(!d?.photos.length){toast("먼저 사진을 촬영하거나 불러오세요.");return;}stopCamera();const unique=orderRightToLeftColumns(uniqueBarcodes(d)),pageSize=3,pageCount=Math.max(1,Math.ceil(unique.length/pageSize));barcodePage=Math.max(0,Math.min(barcodePage,pageCount-1));$("currentUniqueCount").textContent=unique.length+"개";$("currentPhotoCount").textContent=`원본 사진 ${d.photos.length}장 유지`;$("barcodeRange").textContent=unique.length?`${barcodePage*pageSize+1}–${Math.min((barcodePage+1)*pageSize,unique.length)} / ${unique.length}개`:`0–0 / 0개`;$("barcodePageLabel").textContent=`${barcodePage+1} / ${pageCount} 페이지`;$("barcodePrevious").disabled=barcodePage===0;$("barcodeNext").disabled=barcodePage>=pageCount-1;const page=unique.slice(barcodePage*pageSize,(barcodePage+1)*pageSize);$("currentBarcodeItems").innerHTML=page.map((h,i)=>`<li><button data-hit-photo="${h.photoIndex}" data-hit-value="${esc(h.value)}" data-hit-format="${esc(h.format)}"><span class="hit-meta">${barcodePage*pageSize+i+1}　${esc(h.format)} <b>✓ 완료</b></span><span>${esc(formatBarcodeValue(h.value))}</span></button></li>`).join("")||"<li class=empty-barcode>아직 인식 완료한 바코드가 없습니다.</li>";$("barcodeListNotice").textContent="ⓘ　완료 상태는 계속 유지됩니다. 같은 데이터는 문서에 중복 추가하지 않습니다.";showScreen("barcodeListScreen");}
 function showDocumentSaveScreen(target){const d=target?.photos?target:currentCameraDocument();if(photoProcessing||captureInProgress){toast("사진 처리가 끝난 뒤 저장해 주세요.");return;}if(!d?.photos.length){toast("먼저 사진을 촬영해 주세요.");return;}saveTargetId=d.id;stopCamera();$("documentFilename").value=d.name||`스캔 ${new Date().toLocaleDateString("ko-KR")}`;document.querySelectorAll(".format-choice").forEach(b=>b.classList.toggle("selected",b.dataset.format===(workspace.settings.format||"xlsx")));$("filenameExtension").textContent=(workspace.settings.format||"xlsx")==="csv"?".csv":".xlsx";showScreen("documentSaveScreen");}
 function renderTrash(){const docs=workspace.trash||[];$("emptyTrash").classList.toggle("hidden",docs.length>0);$("trashItems").innerHTML=docs.map(d=>`<div class="history-card"><button data-restore="${esc(d.id)}"><b>${esc(d.name)}</b><small>${d.photos.length}장 · 복구하려면 누르세요</small></button><button data-delete="${esc(d.id)}">완전 삭제</button></div>`).join("");}
 function renderDetail(id){stopCamera();detailPreviewUrls.forEach(url=>URL.revokeObjectURL(url));detailPreviewUrls=[];activeDocumentId=id;const d=workspace.documents.find(x=>x.id===id);if(!d)return;const ext=(d.format||"xlsx")==="csv"?".csv":".xlsx",format=ext===".csv"?"CSV":"XLSX (Excel)";$("detailTitle").textContent=d.name+ext;$("detailDate").textContent="저장 "+new Date(d.savedAt).toLocaleString("ko-KR");$("detailSummary").textContent="사진 "+d.photos.length+"장     고유 바코드 "+uniqueBarcodes(d).length+"개";$("detailPhotoCount").textContent=d.photos.length+"장";$("detailBarcodeCount").textContent=uniqueBarcodes(d).length+"개";$("detailFileInfo").textContent=format+" · 파일 경로 /BatchBarcodeSnap/"+d.name+ext;$("detailPhotos").innerHTML=d.photos.map((p,i)=>'<button class="photo-tile" data-photo="'+i+'"><img src="'+(()=>{const url=URL.createObjectURL(p.blob);detailPreviewUrls.push(url);return url;})()+'" alt=""><span>사진 '+(i+1)+'<br>감지 '+p.hits.length+'개 · 읽음 '+p.hits.length+'개</span></button>').join("");$("detailBarcodes").innerHTML=orderRightToLeftColumns(uniqueBarcodes(d)).map((h,i)=>'<li><span class="num">'+(i+1)+'.</span><span class="fmt">'+esc(h.format)+'</span><span>'+esc(formatBarcodeValue(h.value))+'</span></li>').join("");showScreen("detailScreen");}
-function renderPhotoResult(){const d=resultIsDraft?workspace.draft:workspace.documents.find(x=>x.id===resultDocumentId);if(!d)return;const p=d.photos[resultPhotoIndex];if(!p)return;stopCamera();const hits=orderOnePhotoRightToLeft(p.hits||[]);$("photoPosition").textContent=`사진 ${resultPhotoIndex+1} / ${d.photos.length}`;if(photoPreviewUrl)URL.revokeObjectURL(photoPreviewUrl);const url=photoPreviewUrl=URL.createObjectURL(p.blob);$("photoOriginalImage").src=url;$("photoResultImage").src=url;$("photoResultImage").onload=()=>{const boxes=hits.map((h,i)=>({...h,id:i+1,box:h,stable:true,lastSeen:Date.now()}));drawOverlay($("photoResultOverlay"),boxes,p.scanWidth||p.width||$("photoResultImage").naturalWidth,p.scanHeight||p.height||$("photoResultImage").naturalHeight);};$("photoResultSummary").textContent=`읽음 ${hits.length}개\n문서 전체: 사진 ${d.photos.length}장 · 고유 바코드 ${uniqueBarcodes(d).length}개`;$("photoResultList").innerHTML=hits.map((h,i)=>`<li><span class="num">${i+1}.</span><span class="fmt">${esc(h.format)} · ✓ 읽음</span><span>${esc(formatBarcodeValue(h.value))}</span></li>`).join("")||"<li>코드를 찾지 못했어요. 라벨을 더 가까이서 촬영해 주세요.</li>";requestAnimationFrame(()=>{const boxes=hits.map((h,i)=>({...h,id:i+1,box:h,stable:true,lastSeen:Date.now()}));drawOverlay($("photoResultOverlay"),boxes,p.scanWidth||p.width,p.scanHeight||p.height);});$("photoPrevious").disabled=resultPhotoIndex<=0;$("photoNext").disabled=resultPhotoIndex>=d.photos.length-1;showScreen("photoResultScreen");}
+function renderPhotoResult(){const d=resultIsDraft?workspace.draft:workspace.documents.find(x=>x.id===resultDocumentId);if(!d)return;const p=d.photos[resultPhotoIndex];if(!p)return;stopCamera();const hits=orderOnePhotoRightToLeft(p.hits||[]);$("photoPosition").textContent=`사진 ${resultPhotoIndex+1} / ${d.photos.length}`;if(photoPreviewUrl)URL.revokeObjectURL(photoPreviewUrl);const url=photoPreviewUrl=URL.createObjectURL(p.blob);$("photoOriginalImage").src=url;$("photoResultImage").src=url;$("photoResultImage").onload=()=>{const boxes=hits.map((h,i)=>({...h,id:i+1,box:h,stable:!h.hasConflict&&h.recognized!==false,lastSeen:Date.now()}));drawOverlay($("photoResultOverlay"),boxes,p.scanWidth||p.width||$("photoResultImage").naturalWidth,p.scanHeight||p.height||$("photoResultImage").naturalHeight);};$("photoResultSummary").textContent=`${p.scanError?"인식 오류":p.scanState==="scanning"?"사진 인식 중…":hits.some(h=>!h.hasConflict&&h.recognized!==false)?"✓ 사진 인식 완료":hits.length?"값 확인 필요":"사진 인식 완료"} · 읽음 ${hits.filter(h=>!h.hasConflict&&h.recognized!==false).length}개\n문서 전체: 사진 ${d.photos.length}장 · 고유 바코드 ${uniqueBarcodes(d).length}개`;$("photoResultList").innerHTML=hits.map((h,i)=>`<li><span class="num">${i+1}.</span><span class="fmt">${esc(h.format)} · ${h.hasConflict||h.recognized===false?"? 값 확인 필요":"✓ 읽음"}</span><span>${esc(formatBarcodeValue(h.value))}</span></li>`).join("")||"<li>코드를 찾지 못했어요. 라벨을 더 가까이서 촬영해 주세요.</li>";requestAnimationFrame(()=>{const boxes=hits.map((h,i)=>({...h,id:i+1,box:h,stable:!h.hasConflict&&h.recognized!==false,lastSeen:Date.now()}));drawOverlay($("photoResultOverlay"),boxes,p.scanWidth||p.width,p.scanHeight||p.height);});$("photoPrevious").disabled=resultPhotoIndex<=0;$("photoNext").disabled=resultPhotoIndex>=d.photos.length-1;showScreen("photoResultScreen");}
 async function exportDocument(doc){const safeName=doc.name.replace(/[\\/:*?"<>|]/g,"_");if((doc.format||"xlsx")==="csv"){const q=v=>`"${String(v??"").replaceAll('"','""')}"`;const rows=[["순번","사진","형식","바코드 값","왼쪽","위","오른쪽","아래"],...doc.photos.flatMap((p,pi)=>p.hits.map((h,i)=>[i+1,p.name,h.format,h.value,Math.round(h.left),Math.round(h.top),Math.round(h.right),Math.round(h.bottom)]))];const csv="\ufeff"+rows.map(row=>row.map(q).join(",")).join("\r\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));a.download=`${safeName}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500);return;}try{const XLSX=await import("https://esm.sh/xlsx@0.18.5");const wb=XLSX.utils.book_new();const all=doc.photos.flatMap((p,pi)=>p.hits.map((h,i)=>({photo:p.name,photoNo:pi+1,sequence:i+1,format:h.format,value:h.value,left:Math.round(h.left),top:Math.round(h.top),right:Math.round(h.right),bottom:Math.round(h.bottom)})));const unique=uniqueBarcodes(doc);XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(all.map((r,i)=>({"순번":i+1,"사진":r.photo,"형식":r.format,"바코드 값":r.value,"왼쪽":r.left,"위":r.top,"오른쪽":r.right,"아래":r.bottom}))),"사진별 기록");XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(unique.map((h,i)=>({"순번":i+1,"형식":h.format,"바코드 값":h.value}))),"고유 바코드");XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(all.map((r,i)=>({"순번":i+1,"사진 번호":r.photoNo,"사진":r.photo,"사진 내 순번":r.sequence,"형식":r.format,"바코드 값":r.value}))),"바코드별 기록");XLSX.writeFile(wb,`${safeName}.xlsx`);}
 catch(error){console.warn("XLSX export failed; using CSV",error);const q=v=>`"${String(v??"").replaceAll('"','""')}"`;const rows=[["순번","사진","형식","바코드 값"],...doc.photos.flatMap((p,pi)=>p.hits.map((h,i)=>[i+1,p.name,h.format,h.value]))];const csv="\ufeff"+rows.map(row=>row.map(q).join(",")).join("\r\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));a.download=`${safeName}.csv`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500);}}
 async function addPhotoFiles(files,{targetDoc=null,returnToDetail=false,showResult=false}={}){
@@ -331,14 +344,14 @@ async function addPhotoFiles(files,{targetDoc=null,returnToDetail=false,showResu
   if(photoProcessing){toast("사진 인식이 끝난 뒤 추가해 주세요.");return;}
   if(!files?.length)return;
   if(!targetDoc){targetDoc=currentCameraDocument();if(!targetDoc){workspace.draft=createDraft();targetDoc=workspace.draft;}}
-  const target=targetDoc;photoProcessing=true;$("capturePhoto").disabled=true;requestPersistentStorage();showScreen("scannerScreen");let total=0,added=0,failed=0;
+  const target=targetDoc;photoProcessing=true;stopLiveDecoder();$("capturePhoto").disabled=true;requestPersistentStorage();showScreen("scannerScreen");let total=0,added=0,failed=0;
   try{
     for(const file of files){
       if(file.type&&!file.type.startsWith("image/")){failed++;continue;}
       const item={id:makeId(),name:file.name||`사진 ${target.photos.length+1}`,type:file.type||"image/jpeg",blob:file,width:0,height:0,scanWidth:0,scanHeight:0,hits:[],scanState:"scanning"};
-      target.photos.push(item);added++;
+      target.photos.push(item);added++;renderResults();
       setStatus(`사진 ${added} / ${files.length}장 인식 중…`);
-      try{const photo=await scanPhoto(file),sx=photo.width/photo.canvasWidth,sy=photo.height/photo.canvasHeight;Object.assign(item,{width:photo.width,height:photo.height,scanWidth:photo.width,scanHeight:photo.height,hits:photo.hits.map(h=>({...h,left:h.left*sx,top:h.top*sy,right:h.right*sx,bottom:h.bottom*sy})),elapsedMs:photo.elapsedMs,engine:photo.engine,passes:photo.passes,scanState:"done"});total+=item.hits.length;}
+      try{const photo=await scanPhoto(file),sx=photo.width/photo.canvasWidth,sy=photo.height/photo.canvasHeight;Object.assign(item,{width:photo.width,height:photo.height,scanWidth:photo.width,scanHeight:photo.height,hits:photo.hits.map(h=>({...h,left:h.left*sx,top:h.top*sy,right:h.right*sx,bottom:h.bottom*sy})),elapsedMs:photo.elapsedMs,engine:photo.engine,rawHits:photo.rawHits,passes:photo.passes,scanState:"done"});total+=item.hits.length;}
       catch(error){item.scanState="error";item.scanError=error.message||"사진 인식 실패";failed++;}
       normalizeDraftResults();renderResults();await saveWorkspace();
     }
@@ -355,8 +368,8 @@ async function importIntoDocument(files,doc){return addPhotoFiles(files,{targetD
 async function captureFrame(){
   if(captureInProgress||photoProcessing){toast("사진 처리가 끝난 뒤 촬영해 주세요.");return;}
   if(!running||!video.videoWidth){toast("먼저 카메라를 시작하세요.");return;}
-  const targetDoc=currentCameraDocument();captureInProgress=true;$("capturePhoto").disabled=true;
-  try{const c=document.createElement("canvas"),rotate=workspace.settings.rotate;c.width=rotate?video.videoHeight:video.videoWidth;c.height=rotate?video.videoWidth:video.videoHeight;const x=c.getContext("2d");if(rotate){x.translate(c.width,0);x.rotate(Math.PI/2);}x.drawImage(video,0,0,video.videoWidth,video.videoHeight);const blob=await new Promise(resolve=>c.toBlob(resolve,"image/jpeg",.94));if(!blob){toast("사진을 만들지 못했습니다.");return;}if(workspace.settings.sound){try{const Audio=window.AudioContext||window.webkitAudioContext;if(Audio){const ac=new Audio(),osc=ac.createOscillator(),gain=ac.createGain();osc.frequency.value=880;gain.gain.value=.035;osc.connect(gain).connect(ac.destination);osc.onended=()=>ac.close();osc.start();osc.stop(ac.currentTime+.07);}}catch{}}if(workspace.settings.vibration)navigator.vibrate?.(35);await addPhotoFiles([new File([blob],`촬영_${new Date().toISOString().replaceAll(":","-")}.jpg`,{type:"image/jpeg"})],{targetDoc});}
+  const targetDoc=currentCameraDocument(),captureSession=cameraRequestId;captureInProgress=true;$("capturePhoto").disabled=true;
+  try{const {blob}=await captureCameraPhoto({stream,video,rotate:workspace.settings.rotate});if(captureSession!==cameraRequestId)return;if(!blob){toast("사진을 만들지 못했습니다.");return;}if(workspace.settings.sound){try{const Audio=window.AudioContext||window.webkitAudioContext;if(Audio){const ac=new Audio(),osc=ac.createOscillator(),gain=ac.createGain();osc.frequency.value=880;gain.gain.value=.035;osc.connect(gain).connect(ac.destination);osc.onended=()=>ac.close();osc.start();osc.stop(ac.currentTime+.07);}}catch{}}if(workspace.settings.vibration)navigator.vibrate?.(35);await addPhotoFiles([new File([blob],`촬영_${new Date().toISOString().replaceAll(":","-")}.jpg`,{type:"image/jpeg"})],{targetDoc});}
   catch(error){toast(`촬영 실패: ${error.message}`);}finally{captureInProgress=false;$("capturePhoto").disabled=false;}
 }
 async function applyTorch(){const track=stream?.getVideoTracks()[0];if(!track){toast("카메라를 먼저 시작하세요.");return;}try{if(!track.getCapabilities?.().torch)throw new Error('unsupported');await track.applyConstraints({advanced:[{torch:!torchOn}]});torchOn=!torchOn;workspace.settings.torch=torchOn;if($("torchSetting"))$("torchSetting").checked=torchOn;await saveWorkspace();$("torchButton").classList.toggle("active",torchOn);$("torchButton").innerHTML=`▯<small>손전등 ${torchOn?"ON":"OFF"}</small>`;}catch{toast("이 브라우저/카메라는 손전등 제어를 지원하지 않습니다.");}}
@@ -388,3 +401,10 @@ if("serviceWorker"in navigator&&(location.protocol==="https:"||location.hostname
 // Keep early taps from racing the browser database restore.
 document.addEventListener("click",event=>{if(!workspaceReady){event.preventDefault();event.stopImmediatePropagation();toast("저장된 기록을 불러오는 중입니다. 잠시 후 다시 눌러 주세요.");}},true);
 window.addEventListener("unhandledrejection",event=>{console.error("Web action failed",event.reason);toast("작업을 완료하지 못했습니다: "+(event.reason?.message||"잠시 후 다시 시도해 주세요."));});
+
+
+
+
+
+
+

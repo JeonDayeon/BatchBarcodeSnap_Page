@@ -1,4 +1,4 @@
-import { scanPhotoSource } from './photo-engine.js?v=17';
+import { scanPhotoSource } from './photo-engine.js?v=18';
 self.onmessage=async ({data})=>{
   let image;
   try {
@@ -8,3 +8,4 @@ self.onmessage=async ({data})=>{
   } catch(error) {self.postMessage({id:data.id,error:error.message||'사진 인식에 실패했습니다.'});}
   finally {image?.close();}
 };
+

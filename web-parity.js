@@ -1,4 +1,4 @@
-import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage } from './document-files.js?v=17';
+import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage } from './document-files.js?v=18';
 
 // Browser implementations of the Android document and photo actions.
 export function installWebParity(api) {
@@ -256,7 +256,7 @@ export function installWebParity(api) {
       try {
         const r=await scanPhoto(photo.blob),sx=r.width/r.canvasWidth,sy=r.height/r.canvasHeight;
         photo.hits=r.hits.map(h=>({...h,left:h.left*sx,right:h.right*sx,top:h.top*sy,bottom:h.bottom*sy}));
-        photo.width=r.width;photo.height=r.height;photo.scanWidth=r.width;photo.scanHeight=r.height;photo.elapsedMs=r.elapsedMs;photo.scanState='done';delete photo.scanError;
+        photo.width=r.width;photo.height=r.height;photo.scanWidth=r.width;photo.scanHeight=r.height;photo.elapsedMs=r.elapsedMs;photo.engine=r.engine;photo.rawHits=r.rawHits;photo.passes=r.passes;photo.scanState='done';delete photo.scanError;
         if(doc===ws().draft)api.normalizeDraftResults();await saveWorkspace();renderPhotoResult();toast(`다시 인식 완료 · ${photo.hits.length}개`);
       }catch(error){photo.scanError=error.message;await saveWorkspace();renderPhotoResult();throw error;}
     });
@@ -332,3 +332,4 @@ export function installWebParity(api) {
   alphabetical=ws().settings.historySort==='name';
   refresh();
 }
+

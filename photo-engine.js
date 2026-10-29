@@ -1,4 +1,5 @@
 import { prepareZXingModule, readBarcodes, formatToLabel } from './vendor/zxing-wasm/reader.js';
+import { detectNativePixels, combineEngineHits } from './native-decoder.js?v=18';
 
 let ready;
 export function preparePhotoEngine() {
@@ -9,6 +10,25 @@ export function preparePhotoEngine() {
 const FORMATS=['Code128','DataMatrix','QRCode','Code39','Code93','EAN13','EAN8','UPCA','UPCE','ITF','Aztec','PDF417'];
 const options={formats:FORMATS,tryHarder:true,tryRotate:true,tryInvert:true,tryDownscale:true,
   maxNumberOfSymbols:0,minLineCount:3,returnErrors:false,textMode:'Plain'};
+
+async function readFrameRegion(image) {
+  const [decoded,native]=await Promise.all([readBarcodes(image,options),detectNativePixels(image)]);
+  const primary=decoded.filter(r=>r.isValid&&r.text&&r.position).map(r=>{
+    const corners=['topLeft','topRight','bottomRight','bottomLeft'].map(key=>r.position[key]);
+    return {value:r.text,format:formatToLabel(r.format),corners,left:Math.min(...corners.map(p=>p.x)),top:Math.min(...corners.map(p=>p.y)),right:Math.max(...corners.map(p=>p.x)),bottom:Math.max(...corners.map(p=>p.y))};
+  });
+  return mergePhotoHits(combineEngineHits(primary,native));
+}
+export async function scanFramePixels(image) {
+  await preparePhotoEngine();
+  const full=await readFrameRegion(image);
+  if(image.width<800||image.height<600)return full;
+  // A centered crop can recover repeated/small codes missed in the broad frame.
+  const left=Math.floor(image.width*.2),top=Math.floor(image.height*.2),width=Math.floor(image.width*.6),height=Math.floor(image.height*.6),data=new Uint8ClampedArray(width*height*4);
+  for(let row=0;row<height;row++)data.set(image.data.subarray(((top+row)*image.width+left)*4,((top+row)*image.width+left+width)*4),row*width*4);
+  const detail=(await readFrameRegion({width,height,data})).map(h=>({...h,left:h.left+left,top:h.top+top,right:h.right+left,bottom:h.bottom+top,corners:h.corners.map(p=>({x:p.x+left,y:p.y+top}))}));
+  return combineEngineHits([],mergePhotoHits([...full,...detail]));
+}
 
 function samePosition(a,b) {
   if(a.format!==b.format || a.value!==b.value) return false;
@@ -51,13 +71,17 @@ export async function scanPhotoSource(source, makeCanvas, onProgress=()=>{}) {
     canvas.width=Math.max(1,Math.round(w*scale));canvas.height=Math.max(1,Math.round(h*scale));
     context.drawImage(source,x,y,w,h,0,0,canvas.width,canvas.height);
     const t=performance.now();
-    const found=await readBarcodes(context.getImageData(0,0,canvas.width,canvas.height),{...options,...extra});
+    const pixels=context.getImageData(0,0,canvas.width,canvas.height);
+    const [found,native]=await Promise.all([readBarcodes(pixels,{...options,...extra}),detectNativePixels(pixels)]);
+    const primary=[];
     for(const r of found) {
       if(!r.isValid||!r.text||!r.position) continue;
       const corners=['topLeft','topRight','bottomRight','bottomLeft'].map(key=>r.position[key]).filter(Boolean).map(p=>({x:x+p.x*w/canvas.width,y:y+p.y*h/canvas.height}));
       if(corners.length!==4) continue;
-      raw.push({value:r.text,format:formatToLabel(r.format),left:Math.min(...corners.map(p=>p.x)),top:Math.min(...corners.map(p=>p.y)),right:Math.max(...corners.map(p=>p.x)),bottom:Math.max(...corners.map(p=>p.y)),corners,rotation:r.rotation,lineCount:r.lineCount,pass:label});
+      primary.push({value:r.text,format:formatToLabel(r.format),left:Math.min(...corners.map(p=>p.x)),top:Math.min(...corners.map(p=>p.y)),right:Math.max(...corners.map(p=>p.x)),bottom:Math.max(...corners.map(p=>p.y)),corners,rotation:r.rotation,lineCount:r.lineCount,pass:label});
     }
+    const mappedNative=native.map(r=>({...r,left:x+r.left*w/canvas.width,top:y+r.top*h/canvas.height,right:x+r.right*w/canvas.width,bottom:y+r.bottom*h/canvas.height,corners:r.corners.map(p=>({x:x+p.x*w/canvas.width,y:y+p.y*h/canvas.height})),pass:label}));
+    raw.push(...combineEngineHits(primary,mappedNative));
     passes.push({label,count:found.length,elapsedMs:Math.round(performance.now()-t)});
     onProgress({stage:label,count:mergePhotoHits(raw).length});
     // Main-thread fallback also yields so progress, buttons and scrolling can paint.
@@ -83,6 +107,6 @@ export async function scanPhotoSource(source, makeCanvas, onProgress=()=>{}) {
       const n=Math.max(6,Math.min(10,Math.ceil(width/350))),cw=Math.ceil(width/n*1.8);
       for(let i=0;i<n;i++) { const x=Math.min(width-cw,Math.max(0,Math.round(i*width/n-cw*.2)));await pass(x,0,Math.min(cw,width-x),height,`세로 바코드 보완 ${i+1}/${n}`,{formats:['Code128'],tryDownscale:false},4200); }
     }
-    return {hits:mergePhotoHits(raw),width,height,canvasWidth:width,canvasHeight:height,elapsedMs:Math.round(performance.now()-start),engine:'zxing-wasm 3.1.6',rawCount:raw.length,passes};
+    return {hits:combineEngineHits([],mergePhotoHits(raw)),rawHits:raw,width,height,canvasWidth:width,canvasHeight:height,elapsedMs:Math.round(performance.now()-start),engine:'zxing-wasm 3.1.6 + supported native detector',rawCount:raw.length,passes};
   } finally {canvas.width=1;canvas.height=1;}
 }
