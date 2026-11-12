@@ -217,7 +217,10 @@ export function downloadDocumentFile(file) {
 
 /** File sharing support is separate from text/link sharing support. */
 export function canShareDocumentFiles(files) {
-  if (!files?.length || typeof navigator === "undefined" || typeof navigator.share !== "function" || typeof navigator.canShare !== "function") return false;
+  if (!files?.length || typeof navigator === "undefined" || typeof navigator.share !== "function") return false;
+  // Some mobile browsers implement file sharing but omit canShare(). Let the
+  // real share call decide; the click handler can report a clean fallback.
+  if (typeof navigator.canShare !== "function") return true;
   try { return navigator.canShare({ files }); } catch { return false; }
 }
 
