@@ -53,20 +53,26 @@ function conflictValues(hit) {
   return [...new Set(values.filter(value => typeof value === "string" && value.length > 0))];
 }
 function documentTables(doc, options) {
-  const unique = [], photos = [], barcodes = [], conflicts = [], anchors = [], seen = new Set();
+  const unique = [], photos = [], barcodes = [], conflicts = [], anchors = [], conflictHeights = new Map(), seen = new Set();
   for (const [photoIndex, photo] of (doc.photos || []).entries()) {
     const hits = orderedHits(photo, options.order),numbers=photoDisplayNumbers(hits);
     anchors.push({ photo, hits, row: photos.length + 1 });
     for (const [index, hit] of (hits.length ? hits : [null]).entries()) {
       const candidates = hit?.hasConflict ? conflictValues(hit) : [];
       const conflictStatus = candidates.length > 1 ? `충돌 · 후보 ${candidates.length}개` : "충돌 · 확인 필요";
-      const result = hit?.hasConflict ? conflictStatus : hit ? decoded(hit) ? displayValue(hit.value, options.ascii) : "읽지 못함" : "감지된 코드 없음";
+      const displayedCandidates = candidates.map(value => displayValue(value, true));
+      let result = hit ? decoded(hit) ? displayValue(hit.value, options.ascii) : "읽지 못함" : "감지된 코드 없음";
+      if (hit?.hasConflict) {
+        result = [conflictStatus, ...displayedCandidates.map((value, index) => `후보 ${index + 1}: ${value}`)].join("\n");
+        const wrappedLines = result.split("\n").reduce((count, line) => count + Math.max(1, Math.ceil(line.length / 50)), 0);
+        conflictHeights.set(photos.length + 2, Math.min(409, wrappedLines * 16 + 8));
+      }
       const row = [String(doc.id || "").slice(0, 12), timestamp(photo.capturedAt || doc.createdAt), `${photoIndex + 1} / ${doc.photos.length}`, numbers[index]??"", hit?.format || "", result, index === 0 ? "원본 사진" : "", index === 0 ? "인식 결과 사진" : "", photo.name || `사진 ${photoIndex + 1}`, hit?.left ?? "", hit?.top ?? "", hit?.right ?? "", hit?.bottom ?? "", hit?.hasConflict ? JSON.stringify(candidates) : hit ? JSON.stringify(String(hit.value ?? "")) : ""];
       photos.push(row);
       if (hit?.hasConflict) {
         conflicts.push([doc.name || "작업", photoIndex + 1, numbers[index] ?? "", hit.format || "", conflictStatus,
-          displayValue(candidates[0], true), displayValue(candidates[1], true),
-          candidates.slice(2).map(value => displayValue(value, true)).join("\n"), JSON.stringify(candidates)]);
+          displayedCandidates[0] ?? "", displayedCandidates[1] ?? "",
+          displayedCandidates.slice(2).join("\n"), JSON.stringify(candidates)]);
       }
       if (!hit || !decoded(hit)) continue;
       const entry = [doc.name || "작업", timestamp(photo.capturedAt || doc.createdAt), photoIndex + 1, numbers[index]??"", hit.format || "", displayValue(hit.value, options.ascii), JSON.stringify(String(hit.value ?? "")), hit.left ?? "", hit.top ?? "", hit.right ?? "", hit.bottom ?? ""];
@@ -75,7 +81,7 @@ function documentTables(doc, options) {
       if (!seen.has(key)) { seen.add(key); unique.push(entry); }
     }
   }
-  return { unique, photos, barcodes, conflicts, anchors };
+  return { unique, photos, barcodes, conflicts, anchors, conflictHeights };
 }
 
 // Excel treats inline strings as text, preserving leading zeroes and preventing formulas.
@@ -88,7 +94,11 @@ function worksheet(headers, data, options = {}) {
   const rows = [headers, ...data];
   const tallRows = new Set((options.anchors || []).map(anchor => anchor.row + 1));
   const columns = headers.map((_, i) => `<col min="${i + 1}" max="${i + 1}" width="${i === 5 || i === headers.length - 1 ? 58 : i === 6 || i === 7 ? 25 : 20}" customWidth="1"/>`).join("");
-  const content = rows.map((row, r) => `<row r="${r + 1}"${tallRows.has(r + 1) ? ' ht="118" customHeight="1"' : ""}>${row.map((cell, c) => `<c r="${column(c)}${r + 1}" t="inlineStr" s="1"><is><t xml:space="preserve">${xml(cell)}</t></is></c>`).join("")}</row>`).join("");
+  const content = rows.map((row, r) => {
+    const number = r + 1;
+    const height = Math.max(tallRows.has(number) ? 118 : 0, options.conflictHeights?.get(number) ?? 0);
+    return `<row r="${number}"${height ? ` ht="${height}" customHeight="1"` : ""}>${row.map((cell, c) => `<c r="${column(c)}${number}" t="inlineStr" s="1"><is><t xml:space="preserve">${xml(cell)}</t></is></c>`).join("")}</row>`;
+  }).join("");
   return `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${columns}</cols><sheetData>${content}</sheetData><autoFilter ref="A1:${column(headers.length - 1)}${rows.length}"/>${options.drawing ? '<drawing r:id="rId1"/>' : ""}</worksheet>`;
 }
 
@@ -154,10 +164,11 @@ function relationships(entries) { return `<?xml version="1.0" encoding="UTF-8"?>
 /** Builds a genuine file for downloads, external opening or file sharing. Does not save or mutate the document. */
 export async function buildDocumentFile(doc, options = {}) {
   const docs = assertDocumentReady(doc);
-  const format = options.format || docs[0].format || "xlsx", tables = { unique: [], photos: [], barcodes: [], conflicts: [], anchors: [] }, filename = safeFilename(options.name || (docs.length > 1 ? "선택한_문서" : docs[0].name));
+  const format = options.format || docs[0].format || "xlsx", tables = { unique: [], photos: [], barcodes: [], conflicts: [], anchors: [], conflictHeights: new Map() }, filename = safeFilename(options.name || (docs.length > 1 ? "선택한_문서" : docs[0].name));
   for (const item of docs) {
     const next = documentTables(item, options), offset = tables.photos.length;
     tables.anchors.push(...next.anchors.map(anchor => ({ ...anchor, row: anchor.row + offset })));
+    for (const [row, height] of next.conflictHeights) tables.conflictHeights.set(row + offset, height);
     tables.unique.push(...next.unique); tables.photos.push(...next.photos); tables.barcodes.push(...next.barcodes);
     tables.conflicts.push(...next.conflicts);
   }
@@ -186,7 +197,7 @@ export async function buildDocumentFile(doc, options = {}) {
     ["xl/_rels/workbook.xml.rels", relationships([...sheetNames.map((_, i) => [`rId${i + 1}`, "worksheet", `worksheets/sheet${i + 1}.xml`]), [`rId${sheetNames.length + 1}`, "styles", "styles.xml"]])],
     ["xl/styles.xml", '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'],
     ["xl/worksheets/sheet1.xml", worksheet(common, tables.unique)],
-    ["xl/worksheets/sheet2.xml", worksheet(["기록 번호", "촬영 일시", "사진 번호", "사진 내 순번", "바코드 종류", "바코드 값", "원본 사진", "인식 결과 사진", "사진 파일명", "왼쪽", "위", "오른쪽", "아래", "원본 값(JSON)"], tables.photos, { anchors: tables.anchors, drawing: images.length > 0 })],
+    ["xl/worksheets/sheet2.xml", worksheet(["기록 번호", "촬영 일시", "사진 번호", "사진 내 순번", "바코드 종류", "바코드 값", "원본 사진", "인식 결과 사진", "사진 파일명", "왼쪽", "위", "오른쪽", "아래", "원본 값(JSON)"], tables.photos, { anchors: tables.anchors, drawing: images.length > 0, conflictHeights: tables.conflictHeights })],
     ["xl/worksheets/sheet3.xml", worksheet(common, tables.barcodes)],
     ...imageEntries
   ];
