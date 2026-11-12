@@ -1,6 +1,6 @@
 let sequence=0;
 async function decodeOnMainThread(file,onProgress) {
-  const {scanPhotoSource}=await import('./photo-engine.js?v=19');
+  const {scanPhotoSource}=await import('./photo-engine.js?v=22');
   const image=new Image(),url=URL.createObjectURL(file);
   try {image.src=url;await image.decode();return await scanPhotoSource(image,()=>document.createElement('canvas'),onProgress);}
   finally {URL.revokeObjectURL(url);}
@@ -17,7 +17,7 @@ function decodeInWorker(file,onProgress) {
     };
     try {
       const id=++sequence;
-      worker=new Worker(new URL('./photo-worker.js?v=19',import.meta.url),{type:'module'});
+      worker=new Worker(new URL('./photo-worker.js?v=22',import.meta.url),{type:'module'});
       timer=setTimeout(()=>{
         const error=new Error('사진 인식 시간이 초과됐습니다. 원본은 보존되어 있으니 결과의 다시 인식을 눌러 시도해 주세요.');
         error.name='PhotoDecodeTimeoutError';finish(error);

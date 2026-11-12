@@ -1,6 +1,6 @@
 import { installWebParity } from "./web-parity.js?v=21";
-import { decodePhotoFile } from "./photo-decoder.js?v=19";
-import { decodeLiveFrame, stopLiveDecoder } from "./live-decoder.js?v=19";
+import { decodePhotoFile } from "./photo-decoder.js?v=22";
+import { decodeLiveFrame, stopLiveDecoder } from "./live-decoder.js?v=22";
 import { captureCameraPhoto } from "./camera-photo.js?v=19";
 import { createPhotoJobQueue } from "./photo-job-queue.js?v=19";
 import { photoDisplayNumbers } from "./photo-review.js?v=21";

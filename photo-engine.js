@@ -103,6 +103,13 @@ export async function scanPhotoSource(source, makeCanvas, onProgress=()=>{}) {
   }
   try {
     await pass(0,0,width,height,'전체 사진');
+    // Retry long Code 128s at other scales without lowering the scan-line threshold.
+    for (const maxSide of [1920, 2400]) {
+      if (Math.max(width, height) > maxSide) {
+        await pass(0, 0, width, height, `Code 128 크기 보완 (${maxSide}px)`,
+          {formats: ['Code128'], tryDownscale: false}, maxSide);
+      }
+    }
     const cols=Math.min(5,Math.max(2,Math.ceil(width/1400))),rows=Math.min(5,Math.max(2,Math.ceil(height/1400)));
     if(Math.max(width,height)>1400) for(let row=0;row<rows;row++) for(let col=0;col<cols;col++) {
       const x=Math.max(0,Math.floor((col-.18)*width/cols)),y=Math.max(0,Math.floor((row-.18)*height/rows));

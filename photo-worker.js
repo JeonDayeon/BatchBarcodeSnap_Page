@@ -1,4 +1,4 @@
-import { scanPhotoSource } from './photo-engine.js?v=19';
+import { scanPhotoSource } from './photo-engine.js?v=22';
 self.onmessage=async ({data})=>{
   let image;
   try {
