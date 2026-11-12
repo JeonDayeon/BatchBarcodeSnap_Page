@@ -47,14 +47,27 @@ function orderedHits(photo, order) {
   return typeof order === "function" ? order(hits) : hits;
 }
 function decoded(hit) { return hit.recognized !== false && !hit.hasConflict && String(hit.value ?? "").length > 0; }
+function conflictValues(hit) {
+  const values = [hit.value, ...(hit.locationReads || []).filter(read => read.recognized !== false).map(read => read.value),
+    ...(hit.alternativeValues || []).map(read => typeof read === "string" ? read : read?.value)];
+  return [...new Set(values.filter(value => typeof value === "string" && value.length > 0))];
+}
 function documentTables(doc, options) {
-  const unique = [], photos = [], barcodes = [], anchors = [], seen = new Set();
+  const unique = [], photos = [], barcodes = [], conflicts = [], anchors = [], seen = new Set();
   for (const [photoIndex, photo] of (doc.photos || []).entries()) {
     const hits = orderedHits(photo, options.order),numbers=photoDisplayNumbers(hits);
     anchors.push({ photo, hits, row: photos.length + 1 });
     for (const [index, hit] of (hits.length ? hits : [null]).entries()) {
-      const row = [String(doc.id || "").slice(0, 12), timestamp(photo.capturedAt || doc.createdAt), `${photoIndex + 1} / ${doc.photos.length}`, numbers[index]??"", hit?.format || "", hit ? decoded(hit) ? displayValue(hit.value, options.ascii) : "읽지 못함" : "감지된 코드 없음", index === 0 ? "원본 사진" : "", index === 0 ? "인식 결과 사진" : "", photo.name || `사진 ${photoIndex + 1}`, hit?.left ?? "", hit?.top ?? "", hit?.right ?? "", hit?.bottom ?? "", hit ? JSON.stringify(String(hit.value ?? "")) : ""];
+      const candidates = hit?.hasConflict ? conflictValues(hit) : [];
+      const conflictStatus = candidates.length > 1 ? `충돌 · 후보 ${candidates.length}개` : "충돌 · 확인 필요";
+      const result = hit?.hasConflict ? conflictStatus : hit ? decoded(hit) ? displayValue(hit.value, options.ascii) : "읽지 못함" : "감지된 코드 없음";
+      const row = [String(doc.id || "").slice(0, 12), timestamp(photo.capturedAt || doc.createdAt), `${photoIndex + 1} / ${doc.photos.length}`, numbers[index]??"", hit?.format || "", result, index === 0 ? "원본 사진" : "", index === 0 ? "인식 결과 사진" : "", photo.name || `사진 ${photoIndex + 1}`, hit?.left ?? "", hit?.top ?? "", hit?.right ?? "", hit?.bottom ?? "", hit?.hasConflict ? JSON.stringify(candidates) : hit ? JSON.stringify(String(hit.value ?? "")) : ""];
       photos.push(row);
+      if (hit?.hasConflict) {
+        conflicts.push([doc.name || "작업", photoIndex + 1, numbers[index] ?? "", hit.format || "", conflictStatus,
+          displayValue(candidates[0], true), displayValue(candidates[1], true),
+          candidates.slice(2).map(value => displayValue(value, true)).join("\n"), JSON.stringify(candidates)]);
+      }
       if (!hit || !decoded(hit)) continue;
       const entry = [doc.name || "작업", timestamp(photo.capturedAt || doc.createdAt), photoIndex + 1, numbers[index]??"", hit.format || "", displayValue(hit.value, options.ascii), JSON.stringify(String(hit.value ?? "")), hit.left ?? "", hit.top ?? "", hit.right ?? "", hit.bottom ?? ""];
       barcodes.push(entry);
@@ -62,7 +75,7 @@ function documentTables(doc, options) {
       if (!seen.has(key)) { seen.add(key); unique.push(entry); }
     }
   }
-  return { unique, photos, barcodes, anchors };
+  return { unique, photos, barcodes, conflicts, anchors };
 }
 
 // Excel treats inline strings as text, preserving leading zeroes and preventing formulas.
@@ -141,11 +154,12 @@ function relationships(entries) { return `<?xml version="1.0" encoding="UTF-8"?>
 /** Builds a genuine file for downloads, external opening or file sharing. Does not save or mutate the document. */
 export async function buildDocumentFile(doc, options = {}) {
   const docs = assertDocumentReady(doc);
-  const format = options.format || docs[0].format || "xlsx", tables = { unique: [], photos: [], barcodes: [], anchors: [] }, filename = safeFilename(options.name || (docs.length > 1 ? "선택한_문서" : docs[0].name));
+  const format = options.format || docs[0].format || "xlsx", tables = { unique: [], photos: [], barcodes: [], conflicts: [], anchors: [] }, filename = safeFilename(options.name || (docs.length > 1 ? "선택한_문서" : docs[0].name));
   for (const item of docs) {
     const next = documentTables(item, options), offset = tables.photos.length;
     tables.anchors.push(...next.anchors.map(anchor => ({ ...anchor, row: anchor.row + offset })));
     tables.unique.push(...next.unique); tables.photos.push(...next.photos); tables.barcodes.push(...next.barcodes);
+    tables.conflicts.push(...next.conflicts);
   }
   if (format === "csv") {
     const headers = ["문서", "촬영일시", "사진번호", "사진 내 순번", "바코드형식", "바코드값", "원본 값(JSON)", "왼쪽", "위", "오른쪽", "아래"];
@@ -162,19 +176,25 @@ export async function buildDocumentFile(doc, options = {}) {
   }
   const common = ["문서", "촬영 일시", "사진 번호", "사진 내 순번", "바코드 형식", "바코드 값", "원본 값(JSON)", "왼쪽", "위", "오른쪽", "아래"];
   const sheetNames = ["고유 바코드", "사진별 기록", "바코드별 기록"];
+  if (tables.conflicts.length) sheetNames.push("충돌 확인");
   const sheetOverrides = sheetNames.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("");
   const drawingOverrides = images.length ? '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>' : "";
   const entries = [
     ["[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpg" ContentType="image/jpeg"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheetOverrides}${drawingOverrides}</Types>`],
     ["_rels/.rels", relationships([["rId1", "officeDocument", "xl/workbook.xml"]])],
     ["xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetNames.map((name, i) => `<sheet name="${name}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")}</sheets></workbook>`],
-    ["xl/_rels/workbook.xml.rels", relationships([...sheetNames.map((_, i) => [`rId${i + 1}`, "worksheet", `worksheets/sheet${i + 1}.xml`]), ["rId4", "styles", "styles.xml"]])],
+    ["xl/_rels/workbook.xml.rels", relationships([...sheetNames.map((_, i) => [`rId${i + 1}`, "worksheet", `worksheets/sheet${i + 1}.xml`]), [`rId${sheetNames.length + 1}`, "styles", "styles.xml"]])],
     ["xl/styles.xml", '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'],
     ["xl/worksheets/sheet1.xml", worksheet(common, tables.unique)],
     ["xl/worksheets/sheet2.xml", worksheet(["기록 번호", "촬영 일시", "사진 번호", "사진 내 순번", "바코드 종류", "바코드 값", "원본 사진", "인식 결과 사진", "사진 파일명", "왼쪽", "위", "오른쪽", "아래", "원본 값(JSON)"], tables.photos, { anchors: tables.anchors, drawing: images.length > 0 })],
     ["xl/worksheets/sheet3.xml", worksheet(common, tables.barcodes)],
     ...imageEntries
   ];
+  if (tables.conflicts.length) {
+    entries.push(["xl/worksheets/sheet4.xml", worksheet(
+      ["문서", "사진 번호", "사진 내 순번", "바코드 형식", "상태", "후보 1", "후보 2", "추가 후보", "원본 후보(JSON)"],
+      tables.conflicts)]);
+  }
   if (images.length) entries.push(["xl/worksheets/_rels/sheet2.xml.rels", relationships([["rId1", "drawing", "../drawings/drawing1.xml"]])], ["xl/drawings/drawing1.xml", drawing(images)], ["xl/drawings/_rels/drawing1.xml.rels", relationships(images.map((_, i) => [`rId${i + 1}`, "image", `../media/image${i + 1}.jpg`]))]);
   return new File([zip(entries)], `${filename}.xlsx`, { type: XLSX_TYPE });
 }
