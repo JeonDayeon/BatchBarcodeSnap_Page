@@ -1,4 +1,4 @@
-import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=29';
+import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=30';
 import {photoMarker,rotatePhotoHit,photoDisplayNumbers} from './photo-review.js?v=21';
 
 // Browser implementations of the Android document and photo actions.

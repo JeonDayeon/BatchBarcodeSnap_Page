@@ -1,4 +1,4 @@
-import { installWebParity } from "./web-parity.js?v=29";
+import { installWebParity } from "./web-parity.js?v=30";
 import { decodePhotoFile } from "./photo-decoder.js?v=22";
 import { decodeLiveFrame, stopLiveDecoder } from "./live-decoder.js?v=22";
 import { captureCameraPhoto } from "./camera-photo.js?v=19";

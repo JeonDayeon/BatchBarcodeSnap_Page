@@ -239,7 +239,7 @@ export async function shareDocumentFiles(files, options = {}) {
   if (!files?.length) throw new Error("공유할 파일을 선택하세요.");
   if (typeof options.text === "string" && typeof navigator?.share === "function") {
     try {
-      await navigator.share({ title: "바코드 CSV 데이터", text: options.text });
+      await navigator.share({ text: options.text });
       return "shared";
     } catch (error) {
       if (error?.name === "AbortError") return "cancelled";
