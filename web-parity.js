@@ -1,4 +1,4 @@
-import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=28';
+import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=29';
 import {photoMarker,rotatePhotoHit,photoDisplayNumbers} from './photo-review.js?v=21';
 
 // Browser implementations of the Android document and photo actions.
@@ -129,6 +129,18 @@ export function installWebParity(api) {
     let sharing=false,downloadMode=false,downloadFile=files.length===1?files[0]:null;
     const button=$('sharePreparedFiles'),status=$('shareFileStatus'),back=$('documentShareBack');
     const copy=$('copyShareCsv');
+    const textShare=$('shareCsvText');
+    textShare.hidden=csvText===null||typeof navigator.share!=='function';
+    textShare.onclick=textShare.hidden ? null : ()=>{
+      if(sharing)return;
+      sharing=true;
+      textShare.disabled=true;
+      const request=shareDocumentFiles(files,{fallbackToDownload:false,text:csvText});
+      request.then(result=>{status.textContent=result==='shared'?'CSV 내용을 공유 앱에 전달했습니다.':'공유를 취소했습니다.';})
+        .catch(error=>{const cause=error.cause||error;status.textContent='공유 실패 ('+cause.name+'): '+cause.message;})
+        .finally(()=>{sharing=false;textShare.disabled=false;});
+    };
+    textShare.disabled=false;
     copy.hidden=csvText===null||!navigator.clipboard?.writeText;
     copy.onclick=copy.hidden ? null : async()=>{
       try {
@@ -157,11 +169,11 @@ export function installWebParity(api) {
         if(result==='shared')status.textContent='파일 공유를 완료했습니다.';
         else if(result==='cancelled')status.textContent='공유를 취소했습니다. 다시 공유할 수 있습니다.';
         else return prepareDownload('이 파일의 직접 공유를 지원하지 않습니다. 파일 저장 후 휴대폰 파일 앱에서 공유해 주세요.');
-      }).catch(()=>prepareDownload('이 파일의 공유 요청이 차단됐습니다. 파일 저장 후 휴대폰 파일 앱에서 공유해 주세요.')).finally(()=>{sharing=false;button.disabled=downloadMode&&!downloadFile;});
+      }).catch(error=>{const cause=error.cause||error;status.textContent='파일 공유 실패 ('+cause.name+'): '+cause.message+(csvText!==null?' CSV 텍스트 공유를 눌러 내용을 보낼 수 있습니다.':'');}).finally(()=>{sharing=false;button.disabled=downloadMode&&!downloadFile;});
     };
     showScreen('documentShareScreen');
     const csvTextShare=files.length===1&&files[0].name.toLowerCase().endsWith('.csv')&&typeof navigator.share==='function';
-    if(!csvTextShare&&!canShareDocumentFiles(files))await prepareDownload('이 파일의 직접 공유를 지원하지 않습니다. 파일 저장 후 휴대폰 파일 앱에서 공유해 주세요.');
+    if(typeof navigator.share!=='function')await prepareDownload('이 브라우저에 시스템 공유 기능이 없습니다. 파일 저장 후 휴대폰 파일 앱에서 공유해 주세요.');
   }
   intercept('exportSelected', async () => {
     const docs = selectedDocuments(); if (!docs.length) return toast('문서를 선택해 주세요.');
