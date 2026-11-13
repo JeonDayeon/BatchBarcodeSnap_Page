@@ -1,6 +1,6 @@
-const CACHE_NAME = "batchbarcode-shell-v27";
+const CACHE_NAME = "batchbarcode-shell-v28";
 const LIVE_SHELL=["./live-decoder.js?v=22","./live-worker.js?v=22","./native-decoder.js?v=19","./camera-photo.js?v=19"];
-const SHELL = ["./photo-job-queue.js?v=19", "./photo-review.js?v=21", "./", "./index.html", "./styles.css?v=21", "./app.js?v=27", "./web-parity.js?v=27", "./document-files.js?v=27", "./photo-decoder.js?v=22", "./photo-worker.js?v=22", "./photo-engine.js?v=22", "./vendor/zxing-wasm/reader.js", "./vendor/zxing-wasm/share.js", "./vendor/zxing-wasm/zxing_reader.wasm", "./help.html", "./help.css?v=web21", "./help.js?v=web21", "./manifest.webmanifest", "./icon.svg", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
+const SHELL = ["./photo-job-queue.js?v=19", "./photo-review.js?v=21", "./", "./index.html", "./styles.css?v=21", "./app.js?v=28", "./web-parity.js?v=28", "./document-files.js?v=28", "./photo-decoder.js?v=22", "./photo-worker.js?v=22", "./photo-engine.js?v=22", "./vendor/zxing-wasm/reader.js", "./vendor/zxing-wasm/share.js", "./vendor/zxing-wasm/zxing_reader.wasm", "./help.html", "./help.css?v=web21", "./help.js?v=web21", "./manifest.webmanifest", "./icon.svg", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
 
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll([...SHELL,...LIVE_SHELL])).then(() => self.skipWaiting()));

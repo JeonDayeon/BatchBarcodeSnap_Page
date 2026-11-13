@@ -1,4 +1,4 @@
-import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=27';
+import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=28';
 import {photoMarker,rotatePhotoHit,photoDisplayNumbers} from './photo-review.js?v=21';
 
 // Browser implementations of the Android document and photo actions.
@@ -160,7 +160,8 @@ export function installWebParity(api) {
       }).catch(()=>prepareDownload('이 파일의 공유 요청이 차단됐습니다. 파일 저장 후 휴대폰 파일 앱에서 공유해 주세요.')).finally(()=>{sharing=false;button.disabled=downloadMode&&!downloadFile;});
     };
     showScreen('documentShareScreen');
-    if(!canShareDocumentFiles(files))await prepareDownload('이 파일의 직접 공유를 지원하지 않습니다. 파일 저장 후 휴대폰 파일 앱에서 공유해 주세요.');
+    const csvTextShare=files.length===1&&files[0].name.toLowerCase().endsWith('.csv')&&typeof navigator.share==='function';
+    if(!csvTextShare&&!canShareDocumentFiles(files))await prepareDownload('이 파일의 직접 공유를 지원하지 않습니다. 파일 저장 후 휴대폰 파일 앱에서 공유해 주세요.');
   }
   intercept('exportSelected', async () => {
     const docs = selectedDocuments(); if (!docs.length) return toast('문서를 선택해 주세요.');

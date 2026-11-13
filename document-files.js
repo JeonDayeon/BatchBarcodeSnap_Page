@@ -237,6 +237,18 @@ export function documentFileErrorMessage(error, action = "share") {
 
 export async function shareDocumentFiles(files, options = {}) {
   if (!files?.length) throw new Error("공유할 파일을 선택하세요.");
+  if (files.length === 1 && files[0].name.toLowerCase().endsWith(".csv") && typeof navigator?.share === "function") {
+    try {
+      await navigator.share({ title: files[0].name, text: await files[0].text() });
+      return "shared";
+    } catch (error) {
+      if (error?.name === "AbortError") return "cancelled";
+      const friendly = new Error(documentFileErrorMessage(error));
+      friendly.name = "DocumentFileShareError";
+      friendly.cause = error;
+      throw friendly;
+    }
+  }
   if (canShareDocumentFiles(files)) {
     try {
       // Call directly from a fresh click handler, before any asynchronous work.
