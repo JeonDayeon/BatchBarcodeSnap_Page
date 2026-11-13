@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="batchbarcode-release" content="2026-11-13-web26" />
+    <meta name="batchbarcode-release" content="2026-11-13-web27" />
     <meta name="theme-color" content="#101828" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -124,7 +124,7 @@
       <section id="documentShareScreen" class="screen">
         <header class="screen-header"><button id="documentShareBack" class="icon-button" aria-label="문서 공유에서 돌아가기">‹</button><strong>문서 공유</strong><span></span></header>
         <div class="share-content"><h2 id="shareDocumentCount"></h2><p class="muted">아래 파일을 한 번에 공유합니다.<br />공유할 문서를 확인하세요.</p><div id="shareDocumentFiles"></div><p id="shareFileStatus" class="share-file-status" role="status" aria-live="polite"></p><p class="muted">저장된 문서는 그대로 유지됩니다.</p></div>
-        <div class="share-footer"><button id="sharePreparedFiles" class="primary-button">파일 공유</button></div>
+        <div class="share-footer"><button id="copyShareCsv" class="primary-button" hidden>CSV 내용 복사</button><button id="sharePreparedFiles" class="primary-button">파일 공유</button></div>
       </section>
 
       <section id="trashScreen" class="screen">
@@ -172,7 +172,7 @@
       <div id="toast" class="toast hidden" role="status"></div>
       <div id="operationStatus" class="operation-status hidden" role="status" aria-live="polite"></div>
     </main>
-    <script type="module" src="./app.js?v=26"></script>
+    <script type="module" src="./app.js?v=27"></script>
   </body>
 </html>
 

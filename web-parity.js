@@ -1,4 +1,4 @@
-import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=26';
+import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=27';
 import {photoMarker,rotatePhotoHit,photoDisplayNumbers} from './photo-review.js?v=21';
 
 // Browser implementations of the Android document and photo actions.
@@ -124,8 +124,20 @@ export function installWebParity(api) {
     docs=docs.map(doc=>({...doc,format:choice.action}));
     const files=await run('공유 파일을 만드는 중…',async()=>{const ready=[];for(const doc of docs)ready.push(await buildDocumentFile(doc,fileOptions(doc)));return ready;});
     if(!files||shareRequest!==shareSequence)return;
+    const csvText=choice.action==='csv' ? (await Promise.all(files.map(file=>file.text()))).join('\r\n\r\n') : null;
+    if(shareRequest!==shareSequence)return;
     let sharing=false,downloadMode=false,downloadFile=files.length===1?files[0]:null;
     const button=$('sharePreparedFiles'),status=$('shareFileStatus'),back=$('documentShareBack');
+    const copy=$('copyShareCsv');
+    copy.hidden=csvText===null||!navigator.clipboard?.writeText;
+    copy.onclick=copy.hidden ? null : async()=>{
+      try {
+        await navigator.clipboard.writeText(csvText);
+        if(shareRequest===shareSequence)status.textContent='CSV 내용을 복사했습니다. 메시지나 메일에 붙여넣으세요.';
+      } catch {
+        if(shareRequest===shareSequence)status.textContent='복사가 차단됐습니다. 파일 공유 또는 파일 저장을 이용해 주세요.';
+      }
+    };
     $('shareDocumentCount').textContent=`선택한 문서 ${docs.length}개`;
     $('shareDocumentFiles').innerHTML=files.map((file,index)=>`<div class="share-file-row"><span class="share-file-icon" aria-hidden="true">▤</span><div><b>${esc(file.name)}</b><small>${docs[index].format==='csv'?'CSV':'XLSX (Excel)'} · ${esc(new Date(docs[index].createdAt||docs[index].savedAt).toLocaleDateString('ko-KR'))}</small></div><span class="share-file-check" aria-hidden="true">✓</span></div>`).join('');
     async function prepareDownload(message){

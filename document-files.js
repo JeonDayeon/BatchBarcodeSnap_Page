@@ -177,7 +177,7 @@ export async function buildDocumentFile(doc, options = {}) {
     // CSV has no text cell type. Prefix formula-like or numeric strings with an apostrophe;
     // the JSON column retains the original barcode exactly for lossless re-import.
     const cell = value => { let text = String(value ?? ""); if (/^[\s]*[=+\-@]/.test(text) || /^\s*\d/.test(text) || /^[\t\r\n]/.test(text)) text = "'" + text; return `"${text.replaceAll('"', '""')}"`; };
-    return new File(["\ufeff", [headers, ...tables.unique].map(row => row.map(cell).join(",")).join("\r\n")], `${filename}.csv`, { type: "text/csv;charset=utf-8" });
+    return new File(["\ufeff", [headers, ...tables.unique].map(row => row.map(cell).join(",")).join("\r\n")], `${filename}.csv`, { type: "text/csv" });
   }
   if (format !== "xlsx") throw new Error("지원하지 않는 저장 형식입니다.");
   const imageEntries = [], images = [];
