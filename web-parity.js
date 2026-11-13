@@ -1,4 +1,4 @@
-import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=25';
+import { buildDocumentFile, downloadDocumentFile, shareDocumentFiles, openDocumentFile, canShareDocumentFiles, documentFileErrorMessage, assertDocumentReady } from './document-files.js?v=26';
 import {photoMarker,rotatePhotoHit,photoDisplayNumbers} from './photo-review.js?v=21';
 
 // Browser implementations of the Android document and photo actions.
@@ -119,6 +119,9 @@ export function installWebParity(api) {
   async function showDocumentShareScreen(docs,returnScreen){
     const shareRequest=++shareSequence;
     assertDocumentReady(docs);
+    const choice=await dialog('공유할 파일 형식', '<p>CSV는 바코드 데이터를 공유합니다. 사진과 여러 시트는 포함되지 않습니다.</p><p>사진까지 보내려면 Excel을 선택하세요. Chrome에서는 XLSX 직접 공유가 제한될 수 있습니다.</p>', [{label:'CSV 공유',value:'csv'},{label:'Excel 공유',value:'xlsx'},{label:'취소',value:'cancel'}]);
+    if(!choice||choice.action==='cancel'||shareRequest!==shareSequence)return;
+    docs=docs.map(doc=>({...doc,format:choice.action}));
     const files=await run('공유 파일을 만드는 중…',async()=>{const ready=[];for(const doc of docs)ready.push(await buildDocumentFile(doc,fileOptions(doc)));return ready;});
     if(!files||shareRequest!==shareSequence)return;
     let sharing=false,downloadMode=false,downloadFile=files.length===1?files[0]:null;
