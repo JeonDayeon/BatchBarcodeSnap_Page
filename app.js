@@ -253,7 +253,7 @@ function drawOverlay(canvas, boxes, sourceW, sourceH, fit="contain") {
 async function scanFrame(now) {
   if (!running) return;
   raf=requestAnimationFrame(scanFrame);
-  if (photoProcessing) return;
+  if (photoProcessing || captureInProgress) return;
   if(liveEngineFallback&&!zxingReady){setStatus("실시간 인식기를 준비하지 못했습니다. 새로고침하거나 사진 불러오기를 사용해 주세요.");return;}
   if (typeof workspace !== "undefined" && !workspace.settings.auto) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1,"contain"); return; }
   if (!video.videoWidth || busy || now-lastScan<SCAN_MS) { drawOverlay(overlay,tracks,video.videoWidth||1,video.videoHeight||1,"contain"); return; }
@@ -342,8 +342,51 @@ function syncControlSettings(){
   $("frameCount").textContent=`자동 인식 ${workspace.settings.auto?"ON":"OFF"}`;$("rotateButton").classList.toggle("active",!!workspace.settings.rotate);$("rotateButton").setAttribute("aria-pressed",String(!!workspace.settings.rotate));
 }
 function toast(message){const el=$("toast");el.textContent=message;el.classList.remove("hidden");clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.add("hidden"),2400);}
-async function getWorkspace(){const db=await openLocalDatabase();return new Promise((resolve,reject)=>{const req=db.transaction("snapshots","readonly").objectStore("snapshots").get("workspace");req.onsuccess=()=>resolve(req.result?.workspace||null);req.onerror=()=>reject(req.error);});}
-async function saveWorkspace(){if(!workspaceReady)await workspaceReadyPromise;const db=await openLocalDatabase();await new Promise((resolve,reject)=>{const tx=db.transaction("snapshots","readwrite");tx.objectStore("snapshots").put({id:"workspace",savedAt:Date.now(),workspace});tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error("기기 저장이 중단되었습니다."));});$("storageStatus")&&($("storageStatus").textContent="이 기기에 저장됨");}
+async function getWorkspace(){const db=await openLocalDatabase();return new Promise((resolve,reject)=>{const req=db.transaction("snapshots","readonly").objectStore("snapshots").get("workspace");req.onsuccess=()=>resolve(restorePhotoBlobs(req.result?.workspace||null));req.onerror=()=>reject(storageError(req.error));});}
+function storageError(error){return error?.message?error:new Error("기기 저장이 실패했습니다. 오류 세부 정보가 없습니다.");}
+let storageSaveTail=Promise.resolve(),storageUsesBytes=false;
+async function storageSnapshot(value){
+  async function doc(d){return {...d,photos:await Promise.all((d.photos||[]).map(async p=>p.blob instanceof Blob?{...p,blob:await p.blob.arrayBuffer(),blobEncoding:"arraybuffer",type:p.type||p.blob.type}:p))};}
+  return {...value,documents:await Promise.all(value.documents.map(doc)),trash:await Promise.all(value.trash.map(doc)),draft:value.draft?await doc(value.draft):null};
+}
+function restorePhotoBlobs(value){
+  for(const d of [...(value?.documents||[]),...(value?.trash||[]),...(value?.draft?[value.draft]:[])])for(const p of d.photos||[]){
+    if(p.blobEncoding==="arraybuffer"&&p.blob instanceof ArrayBuffer){p.blob=new Blob([p.blob],{type:p.type||"image/jpeg"});delete p.blobEncoding;storageUsesBytes=true;}
+  }
+  return value;
+}
+async function writeWorkspaceSnapshot(){
+  // Complete asynchronous conversion before opening the IndexedDB transaction.
+  const snapshot=storageUsesBytes?await storageSnapshot(workspace):workspace;
+  const db=await openLocalDatabase();
+  await new Promise((resolve,reject)=>{
+    const tx=db.transaction("snapshots","readwrite");let requestError;
+    tx.oncomplete=resolve;
+    tx.onabort=()=>reject(storageError(requestError||tx.error));
+    tx.onerror=event=>{requestError=event.target?.error||tx.error||requestError;};
+    const request=tx.objectStore("snapshots").put({id:"workspace",savedAt:Date.now(),workspace:snapshot});
+    request.onerror=()=>{requestError=request.error;};
+  });
+}
+function saveWorkspace(){
+  const save=async()=>{
+    if(!workspaceReady)await workspaceReadyPromise;
+    try{
+      try{await writeWorkspaceSnapshot();}
+      catch(error){
+        if(!["UnknownError","InvalidStateError","AbortError"].includes(error?.name))throw error;
+        const old=databasePromise;databasePromise=null;try{(await old)?.close();}catch{}
+        storageUsesBytes=true;
+        await writeWorkspaceSnapshot();
+      }
+      if($("storageStatus"))$("storageStatus").textContent="이 기기에 저장됨";
+    }catch(error){
+      if($("storageStatus"))$("storageStatus").textContent="저장 실패 · 사진은 현재 화면에만 보관 중입니다. 창을 닫지 말고 저장을 다시 눌러 주세요.";
+      throw storageError(error);
+    }
+  };
+  const pending=storageSaveTail.then(save);storageSaveTail=pending.catch(()=>{});return pending;
+}
 function isReadHit(hit){return !hit.hasConflict&&hit.recognized!==false&&String(hit.value??"").trim().length>0;}
 function uniqueBarcodes(doc){const map=new Map();for(const [photoIndex,photo] of (doc.photos||[]).entries())for(const hit of photo.hits||[]){if(!isReadHit(hit))continue;const key=`${hit.format}\u0000${hit.value}`;if(!map.has(key))map.set(key,{...hit,photoIndex});}return [...map.values()];}
 function updateDraftSummary(){const d=currentCameraDocument(),photos=d?.photos||[],count=photos.reduce((n,p)=>n+(p.hits||[]).filter(isReadHit).length,0),unique=d?uniqueBarcodes(d).length:0;$("captureCount").innerHTML=`사진 ${photos.length}장<br />한 문서에 계속 추가`;$("scanSummary").textContent=`촬영 사진 ${photos.length}장 · 읽음 ${count}개 · 고유 바코드 ${unique}개`;$("showDraftDetail").innerHTML=`현재 인식 바코드 목록<br /><small>문서 고유 ${unique}개</small>`;const last=photos.at(-1);$("showDraftPhotoResult").disabled=captureInProgress;$("showDraftPhotoResult").textContent=photoProcessing?`사진 인식 중 ${photoJobs.pendingCount}장 · 사진에서 진행 보기`:last?`마지막 촬영 · 읽음 ${(last.hits||[]).filter(isReadHit).length}개${last.scanError?" · 재시도 필요":""} · 결과 보기`:"촬영 후 인식 결과가 여기에 표시됩니다.";}
@@ -477,7 +520,7 @@ async function addPhotoFiles(files,{targetDoc=null,returnToDetail=false,showResu
   }
   if(!items.length){toast("인식할 사진 파일을 선택해 주세요.");return;}
   // Persist originals before decoding so a closed tab does not lose new captures.
-  try{await saveWorkspace();}catch(error){const ids=new Set(items.map(p=>p.id));target.photos=target.photos.filter(p=>!ids.has(p.id));throw error;}
+  try{await saveWorkspace();}catch(error){for(const item of items){item.scanState="interrupted";item.scanError="사진 저장 실패 · 저장 후 다시 인식해 주세요.";}normalizeDraftResults();renderResults();setStatus("사진 저장 실패 · 현재 사진은 유지됩니다. 저장을 다시 시도해 주세요.");throw storageError(error);}
   requestPersistentStorage();showScreen("scannerScreen");
   const promises=items.map(photo=>photoJobs.enqueue({target,photo}));
   if(!waitForScan)return {added:items.length};
@@ -498,9 +541,9 @@ function showCaptureSaved(){const badge=$("captureSaved");clearTimeout(captureFe
 async function captureFrame(){
   if(captureInProgress){toast("사진 촬영이 끝나면 다음 사진을 찍을 수 있어요.");return;}
   if(!running||!video.videoWidth){toast("먼저 카메라를 시작하세요.");return;}
-  const targetDoc=currentCameraDocument(),captureSession=cameraRequestId;captureInProgress=true;$("capturePhoto").disabled=true;
+  const targetDoc=currentCameraDocument(),captureSession=cameraRequestId;captureInProgress=true;stopLiveDecoder();$("capturePhoto").disabled=true;
   try{const {blob}=await captureCameraPhoto({stream,video,rotate:workspace.settings.rotate});if(captureSession!==cameraRequestId)return;if(!blob){toast("사진을 만들지 못했습니다.");return;}if(workspace.settings.sound){try{const Audio=window.AudioContext||window.webkitAudioContext;if(Audio){const ac=new Audio(),osc=ac.createOscillator(),gain=ac.createGain();osc.frequency.value=880;gain.gain.value=.035;osc.connect(gain).connect(ac.destination);osc.onended=()=>ac.close();osc.start();osc.stop(ac.currentTime+.07);}}catch{}}if(workspace.settings.vibration)navigator.vibrate?.(35);const added=await addPhotoFiles([new File([blob],`촬영_${new Date().toISOString().replaceAll(":","-")}.jpg`,{type:"image/jpeg"})],{targetDoc,waitForScan:false});if(added?.added)showCaptureSaved();}
-  catch(error){toast(`촬영 실패: ${error.message}`);}finally{captureInProgress=false;$("capturePhoto").disabled=!running;updateDraftSummary();}
+  catch(error){console.error("Camera capture/save failed",error);toast(`촬영/저장 실패: ${error?.name||"Error"} · ${error?.message||"오류 세부 정보가 없습니다."}`);}finally{captureInProgress=false;$("capturePhoto").disabled=!running;updateDraftSummary();}
 }
 async function applyTorch(){const track=stream?.getVideoTracks()[0];if(!track){toast("카메라를 먼저 시작하세요.");return;}try{if(!track.getCapabilities?.().torch)throw new Error('unsupported');await track.applyConstraints({advanced:[{torch:!torchOn}]});torchOn=!torchOn;workspace.settings.torch=torchOn;if($("torchSetting"))$("torchSetting").checked=torchOn;await saveWorkspace();$("torchButton").classList.toggle("active",torchOn);$("torchButton").innerHTML=`▯<small>손전등 ${torchOn?"ON":"OFF"}</small>`;}catch{toast("이 브라우저/카메라는 손전등 제어를 지원하지 않습니다.");}}
 async function getLegacySnapshot(){const db=await openLocalDatabase();return new Promise((resolve,reject)=>{const req=db.transaction("snapshots","readonly").objectStore("snapshots").get("current");req.onsuccess=()=>resolve(req.result||null);req.onerror=()=>reject(req.error);});}
